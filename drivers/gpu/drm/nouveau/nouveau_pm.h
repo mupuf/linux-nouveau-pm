@@ -72,7 +72,7 @@ int nv50_pm_fanspeed_set(struct drm_device *, int percent);
 /* nva3_pm.c */
 int nva3_pm_clocks_get(struct drm_device *, struct nouveau_pm_level *);
 void *nva3_pm_clocks_pre(struct drm_device *, struct nouveau_pm_level *);
-void nva3_pm_clocks_set(struct drm_device *, void *);
+int nva3_pm_clocks_set(struct drm_device *, void *);
 
 /* nvc0_pm.c */
 int nvc0_pm_clocks_get(struct drm_device *, struct nouveau_pm_level *);
