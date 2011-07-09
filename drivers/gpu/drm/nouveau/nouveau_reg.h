@@ -251,6 +251,8 @@
 #define NV50_PGRAPH_CTXCTL_CUR_INSTANCE                    0x00ffffff
 #define NV50_PGRAPH_CTXCTL_NEXT                            0x00400330
 #define NV50_PGRAPH_CTXCTL_NEXT_INSTANCE                   0x00ffffff
+#define NV50_PGRAPH_CONTROL                                0x00400500
+#define NV50_PGRAPH_FIFO_STATUS                            0x00400504
 #define NV03_PGRAPH_ABS_X_RAM                              0x00400400
 #define NV03_PGRAPH_ABS_Y_RAM                              0x00400480
 #define NV03_PGRAPH_X_MISC                                 0x00400500
@@ -463,6 +465,7 @@
 #define NV50_PFIFO_CTX_TABLE_UNK30_BAD                        (1<<30)
 #define NV50_PFIFO_CTX_TABLE_INSTANCE_MASK_G80             0x0FFFFFFF
 #define NV50_PFIFO_CTX_TABLE_INSTANCE_MASK_G84             0x00FFFFFF
+#define NV50_PFIFO_FREEZE                                  0x00002504
 #define NV03_PFIFO_CACHE0_PUSH0                            0x00003000
 #define NV03_PFIFO_CACHE0_PULL0                            0x00003040
 #define NV04_PFIFO_CACHE0_PULL0                            0x00003050
