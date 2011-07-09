@@ -222,7 +222,7 @@ nv40_pm_gr_idle(void *data)
 	return true;
 }
 
-void
+int
 nv40_pm_clocks_set(struct drm_device *dev, void *pre_state)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
@@ -232,6 +232,7 @@ nv40_pm_clocks_set(struct drm_device *dev, void *pre_state)
 	u32 crtc_mask = 0;
 	u8 sr1[2];
 	int i;
+	int ret = -EAGAIN;
 
 	/* determine which CRTCs are active, fetch VGA_SR1 for each */
 	for (i = 0; i < 2; i++) {
@@ -336,6 +337,8 @@ nv40_pm_clocks_set(struct drm_device *dev, void *pre_state)
 		nv_wr08(dev, 0x0c03c5 + (i * 0x2000), sr1[i]);
 	}
 
+	ret = 0;
+
 	/* resume engines */
 resume:
 	nv_wr32(dev, 0x003250, 0x00000001);
@@ -345,6 +348,8 @@ resume:
 	spin_unlock_irqrestore(&dev_priv->context_switch_lock, flags);
 
 	kfree(info);
+
+	return ret;
 }
 
 int
