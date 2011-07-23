@@ -567,6 +567,7 @@ void nv50_mem_timing_entry(struct drm_device *dev, struct bit_entry *P, struct n
 
 	timing->reg_5 = (e->tRAS << 24 | e->tRC);
 	timing->reg_5 += max(e->tUNK_10, e->tUNK_11) << 16;
+	timing->reg_6 = (nv_rd32(dev, 0x100238) & 0xfffffff0) | (e->tCL - 3);
 
 	if (P->version == 1) {
 		timing->reg_2 |= magic_number << 24;
@@ -590,6 +591,7 @@ void nv50_mem_timing_entry(struct drm_device *dev, struct bit_entry *P, struct n
 		 * 10023c seen as 06xxxxxx, 0bxxxxxx or 0fxxxxxx */
 		timing->reg_7 = 0x202;
 	}
+	timing->reg_8 = (nv_rd32(dev, 0x100240) & 0xfffffff0) | (e->tCL - 2);
 
 	NV_DEBUG(dev, "Entry %d: 220: %08x %08x %08x %08x\n", timing->id,
 		 timing->reg_0, timing->reg_1,
