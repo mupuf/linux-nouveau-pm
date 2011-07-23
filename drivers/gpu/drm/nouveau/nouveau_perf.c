@@ -352,7 +352,8 @@ nouveau_perf_init(struct drm_device *dev)
 						    perflvl->memory / 1000,
 						    entry + perf[3],
 						    perf[5], perf[4]);
-		}
+		} else
+			perflvl->timing = NULL;
 
 		snprintf(perflvl->name, sizeof(perflvl->name),
 			 "performance_level_%d", i);
