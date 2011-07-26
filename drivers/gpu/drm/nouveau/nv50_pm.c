@@ -26,9 +26,11 @@
 #include "nouveau_drv.h"
 #include "nouveau_bios.h"
 #include "nouveau_pm.h"
+#include "nouveau_hwsq.h"
 
 struct nv50_pm_state {
 	struct nouveau_pm_level *perflvl;
+	struct hwsq_ucode ucode;
 	struct pll_lims pll;
 	enum pll_types type;
 	int N, M, P;
@@ -97,6 +99,304 @@ nv50_pm_clocks_get(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	return 0;
 }
 
+static void
+nv50_mem_hwsq_default_pre(struct drm_device *dev, u32 id, struct nv50_pm_state *state)
+{
+	struct hwsq_ucode *hwsq;
+	u32 reg0_old, reg0_new;
+	u32 crtc_mask;
+	int i;
+
+	if (id != PLL_MEMORY)
+	return;
+
+	hwsq = &state->ucode;
+
+	reg0_old = nv_rd32(dev, state->pll.reg + 0);
+	reg0_new = 0x80000000 | (state->P << 16) | (reg0_old & 0xfff8ffff);
+
+	crtc_mask = 0;
+	for (i = 0; i < 2; i++) {
+		if (nv_rd32(dev, NV50_PDISPLAY_CRTC_C(i, CLOCK)))
+			crtc_mask |= (1 << i);
+	}
+
+	hwsq_init(hwsq);
+
+	/* Wait for vblank on all the CRTCs */
+	if (crtc_mask) {
+		hwsq_op5f(hwsq, crtc_mask, 0x00); /* wait for scanout */
+		hwsq_op5f(hwsq, crtc_mask, 0x01); /* wait for vblank */
+	}
+
+	/* maximise the amount of time to reclock memory before the next scanout */
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000001);
+	hwsq_unkn(hwsq, 0x06); /* wait a few µs */
+	hwsq_unkn(hwsq, 0xb0); /* disable bus access */
+	hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
+
+	/* Prepare the memory controller */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+	hwsq_wr32(hwsq, 0x100210, 0x00000000); /* stop the automatic refresh */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000001); /* start self refresh mode */
+
+	/* reclock memory */
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_old);
+	hwsq_wr32(hwsq, state->pll.reg + 4, (state->N << 8) | state->M);
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_new);
+
+	/* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001);
+
+	/* Restart the memory controller */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000000); /* stop self refresh mode */
+	hwsq_wr32(hwsq, 0x100210, 0x80000000); /* restart automatic refresh */
+	hwsq_unkn(hwsq, 0x07); /* wait for the PLL to stabilize (12us) */
+
+	/* may be necessary: causes flickering */
+	hwsq_unkn(hwsq, 0x0b);
+
+	hwsq_unkn(hwsq, 0xd0); /* Enable bus access again */
+	hwsq_op5f(hwsq, 0x00, 0x01);
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000000);
+
+	hwsq_fini(hwsq);
+}
+
+static void
+nv50_mem_hwsq_ddr2_pre(struct drm_device *dev, u32 id, struct nv50_pm_state *state)
+{
+	struct nouveau_pm_memtiming *timings = state->perflvl->timing;
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct hwsq_ucode *hwsq;
+	u32 reg0_old, reg0_new, mr, emr1, cl, wr;
+	u32 crtc_mask;
+	int i;
+
+	if (id != PLL_MEMORY)
+		return;
+
+	hwsq = &state->ucode;
+
+	reg0_old = nv_rd32(dev, state->pll.reg + 0);
+	reg0_new = 0x80000000 | (state->P << 16) | (reg0_old & 0xfff8ffff);
+	mr = nv_rd32(dev, 0x1002c0) & 0xf0feff;
+	emr1 = nv_rd32(dev,0x1002c4);
+	/* Assuming ODT to be off */
+
+	crtc_mask = 0;
+	for (i = 0; i < 2; i++) {
+		if (nv_rd32(dev, NV50_PDISPLAY_CRTC_C(i, CLOCK)))
+			crtc_mask |= (1 << i);
+	}
+
+	hwsq_init(hwsq);
+
+	/* Wait for vblank on all the CRTCs */
+	if (crtc_mask) {
+		hwsq_op5f(hwsq, crtc_mask, 0x00); /* wait for scanout */
+		hwsq_op5f(hwsq, crtc_mask, 0x01); /* wait for vblank */
+	}
+
+	/* maximise the amount of time to reclock memory before the next scanout */
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000001);
+	hwsq_unkn(hwsq, 0x06); /* wait a few Âµs */
+	hwsq_unkn(hwsq, 0xb0); /* disable bus access */
+	hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
+
+	/* Disable DLL: Lowers the reclocking stability */
+	if (pm->memtimings.supported && timings) {
+		hwsq_wr32(hwsq, 0x1002c4, emr1 & 0xf0ffbb);
+		hwsq_unkn(hwsq, 0x06); /* wait a few Âµs (perhaps too much?)*/
+	}
+
+	/* Prepare the memory controller */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+	hwsq_wr32(hwsq, 0x100210, 0x00000000); /* stop the automatic refresh */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000001); /* start self refresh mode */
+
+	/* reclock memory */
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_old);
+	hwsq_wr32(hwsq, state->pll.reg + 4, (state->N << 8) | state->M);
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_new);
+
+	/* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001);
+
+	/* Restart the memory controller */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000000); /* stop self refresh mode */
+	hwsq_wr32(hwsq, 0x100210, 0x80000000); /* restart automatic refresh */
+	hwsq_unkn(hwsq, 0x07); /* wait for the PLL to stabilize (12us) */
+
+	if (pm->memtimings.supported && timings) {
+		/* Set CL and WR */
+		cl = timings->CL;
+		wr = timings->WR;
+
+		mr &= 0xf0f08f;
+		mr |= ((cl & 0x7) << 4) | (((wr - 1) & 0x7) << 9);
+
+		hwsq_wr32(hwsq, 0x1002c0, mr);
+
+		hwsq_wr32(hwsq, 0x10022c, timings->reg_3);
+		hwsq_wr32(hwsq, 0x100224, timings->reg_1);
+		hwsq_wr32(hwsq, 0x100238, timings->reg_6);
+		hwsq_wr32(hwsq, 0x10023c, timings->reg_7);
+		hwsq_wr32(hwsq, 0x100240, timings->reg_8);
+		hwsq_wr32(hwsq, 0x100220, timings->reg_0);
+
+		hwsq_wr32(hwsq, 0x100228, timings->reg_2);
+		hwsq_wr32(hwsq, 0x100230, timings->reg_4);
+		hwsq_wr32(hwsq, 0x100234, timings->reg_5);
+	}
+
+	/* reset DLL */
+	hwsq_wr32(hwsq, 0x1002c0, mr | 0x100);
+	hwsq_wr32(hwsq, 0x1002c0, mr);
+	hwsq_unkn(hwsq, 0x0b); /* wait for DLL to stabilize (48us) */
+	hwsq_wr32(hwsq, 0x1002c4, emr1); /* Re-enable ODT */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge again */
+	hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+
+	hwsq_unkn(hwsq, 0xd0); /* Enable bus access again */
+	hwsq_op5f(hwsq, 0x00, 0x01);
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000000);
+
+	hwsq_fini(hwsq);
+}
+
+uint8_t nv_mem_cl_lut_gddr3[16] = {0,0,0,0,4,5,6,7,0,1,2,3,8,9,10,11};
+uint8_t nv_mem_wr_lut_gddr3[18] = {0,0,0,0,0,2,3,8,9,10,11,0,0,1,1,0,3};
+
+static void
+nv50_mem_hwsq_gddr3_pre(struct drm_device *dev, u32 id, struct nv50_pm_state *state)
+{
+	struct nouveau_pm_memtiming *timings = state->perflvl->timing;
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct hwsq_ucode *hwsq;
+	u32 reg0_old, reg0_new, mr = 0, emr1 = 0, emr1_old, cl, wr;
+	u32 crtc_mask;
+	int i;
+
+	if (id != PLL_MEMORY)
+	return;
+
+	hwsq = &state->ucode;
+
+	reg0_old = nv_rd32(dev, state->pll.reg + 0);
+	reg0_new = 0x80000000 | (state->P << 16) | (reg0_old & 0xfff8ffff);
+
+	if (pm->memtimings.supported && timings) {
+		mr = nv_rd32(dev, 0x1002c0) & 0xf0fe8b;
+		emr1_old = nv_rd32(dev,0x1002c4);
+		emr1 = emr1_old & 0xf0ff0f;
+		cl = nv_mem_cl_lut_gddr3[timings->CL];
+		wr = nv_mem_wr_lut_gddr3[timings->WR];
+		mr |= ((cl & 0x7) << 4) | ((cl & 0x8) << 2);
+		emr1 |= (wr & 0xf) << 4;
+	}
+
+	crtc_mask = 0;
+	for (i = 0; i < 2; i++) {
+		if (nv_rd32(dev, NV50_PDISPLAY_CRTC_C(i, CLOCK)))
+			crtc_mask |= (1 << i);
+	}
+
+	hwsq_init(hwsq);
+
+	/* Wait for vblank on all the CRTCs */
+	if (crtc_mask) {
+		hwsq_op5f(hwsq, crtc_mask, 0x00); /* wait for scanout */
+		hwsq_op5f(hwsq, crtc_mask, 0x01); /* wait for vblank */
+	}
+
+	/* maximise the amount of time to reclock memory before the next scanout */
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000001);
+	hwsq_unkn(hwsq, 0x06); /* wait a few µs */
+	hwsq_unkn(hwsq, 0xb0); /* disable bus access */
+	hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
+
+	/* Disable DLL */
+	if (pm->memtimings.supported && timings) {
+		/*hwsq_wr32(hwsq, 0x1002c4, emr1_old | (0x1 << 6));*/
+	}
+
+	/* Prepare the memory controller */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+	hwsq_wr32(hwsq, 0x100210, 0x00000000); /* stop the automatic refresh */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000001); /* start self refresh mode */
+
+	/* reclock memory */
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_old);
+	hwsq_wr32(hwsq, state->pll.reg + 4, (state->N << 8) | state->M);
+	hwsq_wr32(hwsq, state->pll.reg + 0, reg0_new);
+
+	/* precharge all banks and idle */
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001);
+
+	/* Restart the memory controller */
+	hwsq_wr32(hwsq, 0x1002dc, 0x00000000); /* stop self refresh mode */
+	hwsq_wr32(hwsq, 0x100210, 0x80000000); /* restart automatic refresh */
+	hwsq_unkn(hwsq, 0x07); /* wait for the PLL to stabilize (12us) */
+
+	if (pm->memtimings.supported && timings) {
+		/* Set CL and WR */
+		hwsq_wr32(hwsq, 0x1002c4, emr1);
+		hwsq_wr32(hwsq, 0x1002c0, mr);
+
+		hwsq_wr32(hwsq, 0x10022c, timings->reg_3);
+		hwsq_wr32(hwsq, 0x100224, timings->reg_1);
+		hwsq_wr32(hwsq, 0x100238, timings->reg_6);
+		hwsq_wr32(hwsq, 0x10023c, timings->reg_7);
+		hwsq_wr32(hwsq, 0x100240, timings->reg_8);
+		hwsq_wr32(hwsq, 0x100220, timings->reg_0);
+
+		hwsq_wr32(hwsq, 0x100228, timings->reg_2);
+		hwsq_wr32(hwsq, 0x100230, timings->reg_4);
+		hwsq_wr32(hwsq, 0x100234, timings->reg_5);
+
+		/* reset DLL */
+		hwsq_wr32(hwsq, 0x1002c0, mr | 0x100);
+		hwsq_wr32(hwsq, 0x1002c0, mr);
+		hwsq_unkn(hwsq, 0x0b); /* wait for DLL to stabilize (48us) */
+		hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge again */
+		hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+	}
+
+	hwsq_unkn(hwsq, 0xd0); /* Enable bus access again */
+	hwsq_op5f(hwsq, 0x00, 0x01);
+	hwsq_wr32(hwsq, NV50_PFIFO_FREEZE, 0x00000000);
+
+	hwsq_fini(hwsq);
+}
+
+/**
+ * Prepares MR register values, as documented by RAM vendors
+ * @pre timing entry is initialized by nouveau_mem_timing_init or equivalent
+ */
+static void
+nv50_mem_hwsq_pre(struct drm_device *dev, u32 id, struct nv50_pm_state *state) {
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	switch(pm->memtimings.mem_type) {
+	case NV_MEM_DDR2:
+		nv50_mem_hwsq_ddr2_pre(dev, id, state);
+		break;
+	case NV_MEM_GDDR3:
+		nv50_mem_hwsq_gddr3_pre(dev, id, state);
+		break;
+	default:
+		nv50_mem_hwsq_default_pre(dev, id, state);
+	}
+	return;
+}
+
 static void *
 nv50_pm_clock_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 		  u32 id, int khz)
@@ -122,6 +422,8 @@ nv50_pm_clock_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 		kfree(state);
 		return NULL;
 	}
+
+	nv50_mem_hwsq_pre(dev, id, state);
 
 	return state;
 }
@@ -172,21 +474,21 @@ nv50_pm_pll_set(struct drm_device *dev, struct nv50_pm_state *state)
 	kfree(state);
 }
 
-static void
+static int
 nv50_pm_pll_memory_set(struct drm_device *dev, struct nv50_pm_state *state)
 {
-	struct nouveau_pm_level *perflvl = state->perflvl;
-	u32 reg, tmp;
+	struct nouveau_pm_level *perflvl;
+	struct hwsq_ucode *hwsq;
 	struct bit_entry BIT_M;
+	u32 r100b0c, r619f00;
 	u16 script;
-	int N = state->N;
-	int M = state->M;
-	int P = state->P;
+	int ret = 0;
 
 	if (!state || state->type != PLL_MEMORY)
-		return;
+		return -EPERM;
 
-	reg = state->pll.reg;
+	hwsq = &state->ucode;
+	perflvl = state->perflvl;
 
 	if (perflvl->memscript && bit_table(dev, 'M', &BIT_M) == 0 &&
 	    BIT_M.version == 1 && BIT_M.length >= 0x0b) {
@@ -203,18 +505,25 @@ nv50_pm_pll_memory_set(struct drm_device *dev, struct nv50_pm_state *state)
 		nouveau_bios_run_init_table(dev, perflvl->memscript, NULL, -1);
 	}
 
-	nv_wr32(dev, 0x100210, 0);
-	nv_wr32(dev, 0x1002dc, 1);
+	hwsq_upload(dev, hwsq);
 
-	tmp  = nv_rd32(dev, reg + 0) & 0xfff8ffff;
-	tmp |= 0x80000000 | (P << 16);
-	nv_wr32(dev, reg + 0, tmp);
-	nv_wr32(dev, reg + 4, (N << 8) | M);
+	nv_mask(dev, 0x616308, 0x00000000, 0x00000010);
+	nv_mask(dev, 0x616b08, 0x00000000, 0x00000010);
+	nv_mask(dev, 0x100200, 0x00000800, 0x00000000);
+	r100b0c = nv_mask(dev, 0x100b0c, 0x000000ff, 0x00000012);
+	r619f00 = nv_mask(dev, 0x619f00, 0x00000008, 0x00000000);
 
-	nv_wr32(dev, 0x1002dc, 0);
-	nv_wr32(dev, 0x100210, 0x80000000);
+	ret = hwsq_launch(dev, hwsq);
+
+	nv_wr32(dev, 0x619f00, r619f00);
+	nv_wr32(dev, 0x100b0c, r100b0c);
+	nv_mask(dev, 0x616308, 0x00000000, 0x00000010);
+	nv_mask(dev, 0x616b08, 0x00000000, 0x00000010);
+	nv_mask(dev, 0x100200, 0x00000000, 0x00000800);
 
 	kfree(state);
+
+	return ret;
 }
 
 static bool

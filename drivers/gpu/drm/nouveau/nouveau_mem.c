@@ -700,6 +700,48 @@ nouveau_mem_timing_init(struct drm_device *dev)
 
 	memtimings->nr_timing = hdr->entry_cnt;
 	memtimings->supported = P.version == 1;
+
+	if (strcmp(nouveau_mem_type, "unknown") == 0)
+		memtimings->mem_type = NV_MEM_UNKNOWN;
+	else if (strcmp(nouveau_mem_type, "ddr") == 0)
+		memtimings->mem_type = NV_MEM_DDR;
+	else if (strcmp(nouveau_mem_type, "ddr2") == 0)
+		memtimings->mem_type = NV_MEM_DDR2;
+	else if (strcmp(nouveau_mem_type, "ddr3") == 0)
+		memtimings->mem_type = NV_MEM_DDR3;
+	else if (strcmp(nouveau_mem_type, "gddr2") == 0)
+		memtimings->mem_type = NV_MEM_GDDR2;
+	else if (strcmp(nouveau_mem_type, "gddr3") == 0)
+		memtimings->mem_type = NV_MEM_GDDR3;
+	else if (strcmp(nouveau_mem_type, "gddr5") == 0)
+		memtimings->mem_type = NV_MEM_GDDR3;
+	else /* Auto mode */
+		memtimings->mem_type = NV_MEM_UNKNOWN;
+
+	switch(memtimings->mem_type) {
+	case NV_MEM_DDR:
+		NV_INFO(dev, "Using memory type: DDR\n");
+		break;
+	case NV_MEM_DDR2:
+		NV_INFO(dev, "Using memory type: DDR2\n");
+		break;
+	case NV_MEM_DDR3:
+		NV_INFO(dev, "Using memory type: DDR3\n");
+		break;
+	case NV_MEM_GDDR2:
+		NV_INFO(dev, "Using memory type: GGDR2\n");
+		break;
+	case NV_MEM_GDDR3:
+		NV_INFO(dev, "Using memory type: GGDR3\n");
+		break;
+	case NV_MEM_GDDR5:
+		NV_INFO(dev, "Using memory type: GGDR5\n");
+		break;
+	case NV_MEM_UNKNOWN:
+	default:
+		NV_INFO(dev, "Using memory type: UNKNOWN\n");
+		break;
+	}
 }
 
 void

@@ -520,8 +520,19 @@ struct nouveau_pm_threshold_temp {
 	s16 fan_boost;
 };
 
+enum nouveau_mem_type {
+	NV_MEM_UNKNOWN,
+	NV_MEM_DDR,
+	NV_MEM_DDR2,
+	NV_MEM_DDR3,
+	NV_MEM_GDDR2,
+	NV_MEM_GDDR3,
+	NV_MEM_GDDR5
+};
+
 struct nouveau_pm_memtimings {
 	bool supported;
+	enum nouveau_mem_type mem_type;
 	struct nouveau_pm_memtiming *timing;
 	int nr_timing;
 };
@@ -866,6 +877,7 @@ extern char *nouveau_perflvl;
 extern int nouveau_perflvl_wr;
 extern int nouveau_msi;
 extern int nouveau_ctxfw;
+extern char *nouveau_mem_type;
 
 extern int nouveau_pci_suspend(struct pci_dev *pdev, pm_message_t pm_state);
 extern int nouveau_pci_resume(struct pci_dev *pdev);

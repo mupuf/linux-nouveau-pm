@@ -123,6 +123,12 @@ MODULE_PARM_DESC(ctxfw, "Use external HUB/GPC ucode (fermi)\n");
 int nouveau_ctxfw;
 module_param_named(ctxfw, nouveau_ctxfw, int, 0400);
 
+MODULE_PARM_DESC(mem_type, "Override memory type:\n"
+		"\t\tSupported: unknown, ddr2, ddr3,\n"
+		"\t\tgddr2, gddr3, gddr5, auto.\n");
+char *nouveau_mem_type = "auto";
+module_param_named(mem_type, nouveau_mem_type, charp, 0400);
+
 int nouveau_fbpercrtc;
 #if 0
 module_param_named(fbpercrtc, nouveau_fbpercrtc, int, 0400);
