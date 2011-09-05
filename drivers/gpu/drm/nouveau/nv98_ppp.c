@@ -39,6 +39,11 @@ nv98_ppp_fini(struct drm_device *dev, int engine, bool suspend)
 		return 0;
 
 	nv_mask(dev, 0x000200, 0x00000002, 0x00000000);
+
+	/* power savings: disable ppp */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000030, 0x00000030);
+
 	return 0;
 }
 
@@ -47,6 +52,10 @@ nv98_ppp_init(struct drm_device *dev, int engine)
 {
 	nv_mask(dev, 0x000200, 0x00000002, 0x00000000);
 	nv_mask(dev, 0x000200, 0x00000002, 0x00000002);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000030, 0x00000010);
 	return 0;
 }
 

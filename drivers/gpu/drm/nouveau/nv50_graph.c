@@ -135,6 +135,10 @@ nv50_graph_init(struct drm_device *dev, int engine)
 	nv_mask(dev, 0x000200, 0x00201000, 0x00201000);
 	nv_wr32(dev, 0x40008c, 0x00000004); /* HW_CTX_SWITCH_ENABLED */
 
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000003, 0x00000001);
+
 	/* reset/enable traps and interrupts */
 	nv_wr32(dev, 0x400804, 0xc0000000);
 	nv_wr32(dev, 0x406800, 0xc0000000);

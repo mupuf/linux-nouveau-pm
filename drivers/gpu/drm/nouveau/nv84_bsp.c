@@ -44,6 +44,10 @@ nv84_bsp_fini(struct drm_device *dev, int engine, bool suspend)
 		return 0;
 
 	nv_mask(dev, 0x000200, 0x00008000, 0x00000000);
+
+	/* power savings: disable bsp */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00003000, 0x00003000);
 	return 0;
 }
 
@@ -52,6 +56,10 @@ nv84_bsp_init(struct drm_device *dev, int engine)
 {
 	nv_mask(dev, 0x000200, 0x00008000, 0x00000000);
 	nv_mask(dev, 0x000200, 0x00008000, 0x00008000);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00003000, 0x00001000);
 	return 0;
 }
 

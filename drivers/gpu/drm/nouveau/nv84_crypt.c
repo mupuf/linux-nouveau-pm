@@ -141,6 +141,10 @@ static int
 nv84_crypt_fini(struct drm_device *dev, int engine, bool suspend)
 {
 	nv_wr32(dev, 0x102140, 0x00000000);
+
+	/* power savings: disable the engine */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000c00, 0x00000c00);
 	return 0;
 }
 
@@ -154,6 +158,11 @@ nv84_crypt_init(struct drm_device *dev, int engine)
 	nv_wr32(dev, 0x102140, 0xffffffbf);
 
 	nv_wr32(dev, 0x10200c, 0x00000010);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000c00, 0x00000400);
+
 	return 0;
 }
 
