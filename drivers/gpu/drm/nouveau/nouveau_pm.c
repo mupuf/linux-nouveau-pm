@@ -771,6 +771,10 @@ nouveau_pm_init(struct drm_device *dev)
 	register_acpi_notifier(&pm->acpi_nb);
 #endif
 
+	/* where should I enable PCIE power savings? */
+	if (dev_priv->card_type >= NV_50)
+		nv_mask(dev, 0x88150, 0x100, 0x0);
+
 	return 0;
 }
 
