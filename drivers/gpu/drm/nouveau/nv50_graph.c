@@ -133,6 +133,11 @@ nv50_graph_init(struct drm_device *dev, int engine)
 	/* master reset */
 	nv_mask(dev, 0x000200, 0x00200100, 0x00000000);
 	nv_mask(dev, 0x000200, 0x00200100, 0x00200100);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000003, 0x00000001);
+
 	nv_wr32(dev, 0x40008c, 0x00000004); /* HW_CTX_SWITCH_ENABLED */
 
 	/* reset/enable traps and interrupts */
@@ -218,6 +223,10 @@ nv50_graph_fini(struct drm_device *dev, int engine, bool suspend)
 	}
 	nv50_graph_unload_context(dev);
 	nv_wr32(dev, 0x40013c, 0x00000000);
+
+	/* power savings: disable pgraph */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000003, 0x00000003);
 	return 0;
 }
 

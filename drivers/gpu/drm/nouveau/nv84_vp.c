@@ -44,6 +44,15 @@ nv84_vp_fini(struct drm_device *dev, int engine, bool suspend)
 		return 0;
 
 	nv_mask(dev, 0x000200, 0x00020000, 0x00000000);
+
+	/* power savings: disable vp */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000030, 0x00000030);
+
+	/* power savings: disable pvp */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000300, 0x00000300);
+
 	return 0;
 }
 
@@ -52,6 +61,15 @@ nv84_vp_init(struct drm_device *dev, int engine)
 {
 	nv_mask(dev, 0x000200, 0x00020000, 0x00000000);
 	nv_mask(dev, 0x000200, 0x00020000, 0x00020000);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000020, 0x00000020);
+	nv_mask(dev, NV_PBUS_POWERCTRL_2, 0x00000030, 0x00000010);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000300, 0x00000100);
+
 	return 0;
 }
 

@@ -39,6 +39,11 @@ nv98_crypt_fini(struct drm_device *dev, int engine, bool suspend)
 		return 0;
 
 	nv_mask(dev, 0x000200, 0x00004000, 0x00000000);
+
+	/* power savings: disable crypt */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000c00, 0x00000c00);
+
 	return 0;
 }
 
@@ -47,6 +52,11 @@ nv98_crypt_init(struct drm_device *dev, int engine)
 {
 	nv_mask(dev, 0x000200, 0x00004000, 0x00000000);
 	nv_mask(dev, 0x000200, 0x00004000, 0x00004000);
+
+	/* power savings: automatic clock gating */
+	nv_mask(dev, NV_PBUS_DEBUG_4, 0x00000040, 0x00000040);
+	nv_mask(dev, NV_PBUS_POWERCTRL_4, 0x00000c00, 0x00000400);
+
 	return 0;
 }
 
