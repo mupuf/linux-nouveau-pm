@@ -93,6 +93,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.init		= nouveau_mem_detect;
 		engine->vram.takedown		= nouveau_stub_takedown;
 		engine->vram.flags_valid	= nouveau_mem_flags_valid;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0x10:
 		engine->instmem.init		= nv04_instmem_init;
@@ -142,6 +148,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.init		= nouveau_mem_detect;
 		engine->vram.takedown		= nouveau_stub_takedown;
 		engine->vram.flags_valid	= nouveau_mem_flags_valid;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0x20:
 		engine->instmem.init		= nv04_instmem_init;
@@ -191,6 +203,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.init		= nouveau_mem_detect;
 		engine->vram.takedown		= nouveau_stub_takedown;
 		engine->vram.flags_valid	= nouveau_mem_flags_valid;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0x30:
 		engine->instmem.init		= nv04_instmem_init;
@@ -242,6 +260,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.init		= nouveau_mem_detect;
 		engine->vram.takedown		= nouveau_stub_takedown;
 		engine->vram.flags_valid	= nouveau_mem_flags_valid;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0x40:
 	case 0x60:
@@ -311,6 +335,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.init		= nouveau_mem_detect;
 		engine->vram.takedown		= nouveau_stub_takedown;
 		engine->vram.flags_valid	= nouveau_mem_flags_valid;
+		engine->pm.counter.init		= nv40_counter_init;
+		engine->pm.counter.takedown	= nv40_counter_fini;
+		engine->pm.counter.start	= nv40_counter_start;
+		engine->pm.counter.stop		= nv40_counter_stop;
+		engine->pm.counter.signal_value	= nv40_counter_value;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0x50:
 	case 0x80: /* gotta love NVIDIA's consistency.. */
@@ -393,6 +423,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->vram.get		= nv50_vram_new;
 		engine->vram.put		= nv50_vram_del;
 		engine->vram.flags_valid	= nv50_vram_flags_valid;
+		engine->pm.counter.init		= nv40_counter_init;
+		engine->pm.counter.takedown	= nv40_counter_fini;
+		engine->pm.counter.start	= nv40_counter_start;
+		engine->pm.counter.stop		= nv40_counter_stop;
+		engine->pm.counter.signal_value	= nv40_counter_value;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0xc0:
 		engine->instmem.init		= nvc0_instmem_init;
@@ -445,6 +481,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->pm.voltage_set		= nouveau_voltage_gpio_set;
 		engine->pm.fanspeed_get		= nv50_pm_fanspeed_get;
 		engine->pm.fanspeed_set		= nv50_pm_fanspeed_set;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= nouveau_pm_counter_update;
 		break;
 	case 0xd0:
 		engine->instmem.init		= nvc0_instmem_init;
@@ -494,6 +536,12 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 		engine->pm.clocks_get		= nvc0_pm_clocks_get;
 		engine->pm.voltage_get		= nouveau_voltage_gpio_get;
 		engine->pm.voltage_set		= nouveau_voltage_gpio_set;
+		engine->pm.counter.init		= NULL;
+		engine->pm.counter.takedown	= NULL;
+		engine->pm.counter.start	= NULL;
+		engine->pm.counter.stop		= NULL;
+		engine->pm.counter.signal_value	= NULL;
+		engine->pm.counter.on_update	= NULL;
 		break;
 	default:
 		NV_ERROR(dev, "NV%02x unsupported\n", dev_priv->chipset);

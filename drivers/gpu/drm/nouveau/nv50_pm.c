@@ -648,7 +648,7 @@ cleanup:
 
 	spin_unlock_irqrestore(&dev_priv->context_switch_lock, flags);
 
-	NV_INFO(dev, "pm: reclocking took %lluns\n",
+	NV_DEBUG(dev, "pm: reclocking took %lluns\n",
 		(nv04_timer_read(dev) - start_time));
 
 	kfree(pre_state);

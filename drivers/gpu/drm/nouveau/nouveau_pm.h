@@ -26,6 +26,7 @@
 #define __NOUVEAU_PM_H__
 
 /* nouveau_pm.c */
+void nouveau_pm_counter_update(struct drm_device *dev);
 int  nouveau_pm_init(struct drm_device *dev);
 void nouveau_pm_fini(struct drm_device *dev);
 void nouveau_pm_resume(struct drm_device *dev);
@@ -83,4 +84,11 @@ void nouveau_temp_safety_checks(struct drm_device *dev);
 int nv40_temp_get(struct drm_device *dev);
 int nv84_temp_get(struct drm_device *dev);
 
+/* nv40_counter.c */
+int nv40_counter_init(struct drm_device *dev);
+void nv40_counter_fini(struct drm_device *dev);
+void nv40_counter_start(struct drm_device *dev);
+void nv40_counter_stop(struct drm_device *dev);
+int nv40_counter_value(struct drm_device *,
+		       enum nouveau_counter_signal, u32 *, u32 *);
 #endif

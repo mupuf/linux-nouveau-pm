@@ -39,6 +39,8 @@
 #define NOUVEAU_FAMILY   0x0000FFFF
 #define NOUVEAU_FLAGS    0xFFFF0000
 
+#include <linux/timer.h>
+
 #include "ttm/ttm_bo_api.h"
 #include "ttm/ttm_bo_driver.h"
 #include "ttm/ttm_placement.h"
@@ -538,6 +540,37 @@ struct nouveau_pm_fan {
 	u32 pwm_freq;
 };
 
+enum nouveau_counter_signal {
+	NONE = 0,
+
+	TIMER_B12,
+
+	PGRAPH_IDLE,
+	PGRAPH_INTR_PENDING,
+	CTXPROG_ACTIVE,
+};
+
+struct nouveau_pm_counter {
+	bool state;
+
+	/* the 8 sets * 4 counters */
+	enum nouveau_counter_signal signals[8][4];
+	struct {
+		u32 cycles;
+		u32 signals[4];
+	} sets[8];
+	struct timer_list readout_timer;
+
+	int  (*init)(struct drm_device *);
+	void (*takedown)(struct drm_device *);
+	void (*start)(struct drm_device *);
+	void (*stop)(struct drm_device *);
+	int  (*signal_value)(struct drm_device *,
+			     enum nouveau_counter_signal signal,
+			     u32 *val, u32 *count);
+	void (*on_update)(struct drm_device *);
+};
+
 struct nouveau_pm_engine {
 	struct nouveau_pm_voltage voltage;
 	struct nouveau_pm_level perflvl[NOUVEAU_PM_MAX_LEVEL];
@@ -546,6 +579,7 @@ struct nouveau_pm_engine {
 	struct nouveau_pm_temp_sensor_constants sensor_constants;
 	struct nouveau_pm_threshold_temp threshold_temp;
 	struct nouveau_pm_fan fan;
+	struct nouveau_pm_counter counter;
 	u32 pwm_divisor;
 
 	struct nouveau_pm_level boot;
@@ -553,6 +587,8 @@ struct nouveau_pm_engine {
 
 	struct device *hwmon;
 	struct notifier_block acpi_nb;
+	u64 last_reclock;
+	u64 last_usage;
 
 	int (*clock_get)(struct drm_device *, u32 id);
 	void *(*clock_pre)(struct drm_device *, struct nouveau_pm_level *,
