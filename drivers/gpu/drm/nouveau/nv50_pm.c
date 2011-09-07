@@ -155,7 +155,7 @@ nv50_mem_hwsq_default_pre(struct drm_device *dev, u32 id, struct nv50_pm_state *
 	hwsq_unkn(hwsq, 0x07); /* wait for the PLL to stabilize (12us) */
 
 	/* may be necessary: causes flickering */
-	hwsq_unkn(hwsq, 0x0b);
+	/*hwsq_unkn(hwsq, 0x0b);*/
 
 	hwsq_unkn(hwsq, 0xd0); /* Enable bus access again */
 	hwsq_op5f(hwsq, 0x00, 0x01);
