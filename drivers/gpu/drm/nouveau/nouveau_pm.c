@@ -62,7 +62,7 @@ nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	int ret;
 
-	if (perflvl == pm->cur)
+	if (!perflvl || perflvl == pm->cur)
 		return 0;
 
 	NV_INFO(dev, "changing performance level: %i -> %i\n",
@@ -102,7 +102,7 @@ nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	}
 
 	pm->cur = perflvl;
-	pm->last_reclock = dev_priv->engine.timer.read(dev);
+	pm->dvfs.last_reclock = dev_priv->engine.timer.read(dev);
 	return 0;
 }
 
@@ -455,6 +455,44 @@ static SENSOR_DEVICE_ATTR(pgraph_usage, S_IRUGO, nouveau_hwmon_show_pgraph_usage
 			  NULL, 0);
 
 static ssize_t
+nouveau_dvfs_enabled(struct device *d, struct device_attribute *a, char *buf)
+{
+	struct drm_device *dev = dev_get_drvdata(d);
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	return snprintf(buf, PAGE_SIZE, "%i\n", pm->dvfs.active);
+}
+static ssize_t
+nouveau_hwmon_set_devfs(struct device *d, struct device_attribute *a,
+						const char *buf, size_t count)
+{
+	struct drm_device *dev = dev_get_drvdata(d);
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	long value;
+
+	if (nouveau_perflvl_wr != 7777)
+		return -EPERM;
+
+	if (strict_strtol(buf, 10, &value) == -EINVAL)
+		return count;
+
+	if (value < 0 || value > 1)
+		return -EINVAL;
+
+	if (value)
+		pm->dvfs.start(dev);
+	else
+		pm->dvfs.stop(dev);
+
+	return count;
+}
+static SENSOR_DEVICE_ATTR(dvfs_enable, S_IRUGO | S_IWUSR, nouveau_dvfs_enabled,
+						  nouveau_hwmon_set_devfs,
+						  0);
+
+static ssize_t
 nouveau_hwmon_show_fan0_input(struct device *d, struct device_attribute *attr,
 			      char *buf)
 {
@@ -631,6 +669,7 @@ static struct attribute *hwmon_attributes[] = {
 	&sensor_dev_attr_name.dev_attr.attr,
 	&sensor_dev_attr_update_rate.dev_attr.attr,
 	&sensor_dev_attr_pgraph_usage.dev_attr.attr,
+	&sensor_dev_attr_dvfs_enable.dev_attr.attr,
 	NULL
 };
 static struct attribute *hwmon_fan_rpm_attributes[] = {
@@ -753,18 +792,46 @@ nouveau_pm_acpi_event(struct notifier_block *nb, unsigned long val, void *data)
 }
 #endif
 
+static void
+nouveau_pm_dvfs_init(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
+
+	dvfs->pl_idle = NULL;
+	dvfs->pl_2d = NULL;
+	dvfs->pl_max = NULL;
+	
+	if (pm->nr_perflvl == 0)
+		return;
+
+	/* the idle perflvl (long inactivity) */
+	dvfs->pl_idle = &pm->perflvl[0];
+
+	/* minimum performance wanted (short inactivity) */
+	if (pm->nr_perflvl > 2)
+		dvfs->pl_2d = &pm->perflvl[1];
+	else
+		dvfs->pl_2d = &pm->perflvl[0];
+
+	/* the maximum perflvl that will be set when the GPU is used */
+	dvfs->pl_max = &pm->perflvl[pm->nr_perflvl - 1];
+}
+
 static bool
 nouveau_pm_lower_perflvl(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
 	int i;
 
 	/* find current perflvl */
 	for (i = 0; i < pm->nr_perflvl; i++) {
 		if (pm->cur == &pm->perflvl[i]) {
-			/* downclock fast down to perflvl 1 only */
-			if (pm->perflvl[i].id <= 1)
+			/* downclock fast down to perflvl 2D only */
+			if (pm->perflvl[i].id <= dvfs->pl_idle->id)
 				return 1;
 
 			nouveau_pm_perflvl_set(dev, &pm->perflvl[i - 1]);
@@ -781,11 +848,14 @@ nouveau_pm_counter_update(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
-	u32 val, count;
+	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
+	u64 interval_reclock = (dev_priv->engine.timer.read(dev) - pm->dvfs.last_reclock) / 1000000;
+	u64 interval_usage = (dev_priv->engine.timer.read(dev) - pm->dvfs.last_usage) / 1000000;
 	u64 pgraph_idle;
-	u64 interval_reclock = (dev_priv->engine.timer.read(dev) - pm->last_reclock) / 1000000;
-	u64 interval_usage = (dev_priv->engine.timer.read(dev) - pm->last_usage) / 1000000;
+	u32 val, count;
 
+	if (!pm->dvfs.active)
+		return;
 
 	if (pm->counter.signal_value(dev, PGRAPH_IDLE, &val, &count))
 		return;
@@ -798,11 +868,11 @@ nouveau_pm_counter_update(struct drm_device *dev)
 	 * the transition between perflvl1 and 0 takes 10s
 	 */
 	if (pgraph_idle < 20) {
-		nouveau_pm_perflvl_set(dev, &pm->perflvl[pm->nr_perflvl - 1]);
-		pm->last_usage = dev_priv->engine.timer.read(dev);
+		nouveau_pm_perflvl_set(dev, dvfs->pl_max);
+		pm->dvfs.last_usage = dev_priv->engine.timer.read(dev);
 	} else if (interval_usage > 5000 && interval_reclock > 2000) {
 		if (nouveau_pm_lower_perflvl(dev) && interval_usage > 30000) {
-			nouveau_pm_perflvl_set(dev, &pm->perflvl[0]);
+			nouveau_pm_perflvl_set(dev, dvfs->pl_idle);
 		}
 	}
 }
@@ -856,6 +926,8 @@ nouveau_pm_init(struct drm_device *dev)
 	if (dev_priv->card_type >= NV_50)
 		nv_mask(dev, 0x88150, 0x100, 0x0);
 
+	/* for dvfs */
+	nouveau_pm_dvfs_init(dev);
 	if (pm->counter.init) {
 		pm->counter.init(dev);
 		if (pm->counter.start)
@@ -887,6 +959,10 @@ nouveau_pm_fini(struct drm_device *dev)
 #endif
 	nouveau_hwmon_fini(dev);
 	nouveau_sysfs_fini(dev);
+	
+	/* for dvfs */
+	if (pm->counter.takedown)
+		pm->counter.takedown(dev);
 }
 
 void

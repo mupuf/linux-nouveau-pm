@@ -571,6 +571,16 @@ struct nouveau_pm_counter {
 	void (*on_update)(struct drm_device *);
 };
 
+struct nouveau_pm_dvfs {
+	bool active;
+	u64 last_reclock;
+	u64 last_usage;
+	
+	struct nouveau_pm_level *pl_idle;
+	struct nouveau_pm_level *pl_2d;
+	struct nouveau_pm_level *pl_max;
+};
+
 struct nouveau_pm_engine {
 	struct nouveau_pm_voltage voltage;
 	struct nouveau_pm_level perflvl[NOUVEAU_PM_MAX_LEVEL];
@@ -580,6 +590,7 @@ struct nouveau_pm_engine {
 	struct nouveau_pm_threshold_temp threshold_temp;
 	struct nouveau_pm_fan fan;
 	struct nouveau_pm_counter counter;
+	struct nouveau_pm_dvfs dvfs;
 	u32 pwm_divisor;
 
 	struct nouveau_pm_level boot;
@@ -587,8 +598,6 @@ struct nouveau_pm_engine {
 
 	struct device *hwmon;
 	struct notifier_block acpi_nb;
-	u64 last_reclock;
-	u64 last_usage;
 
 	int (*clock_get)(struct drm_device *, u32 id);
 	void *(*clock_pre)(struct drm_device *, struct nouveau_pm_level *,
