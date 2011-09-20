@@ -30,6 +30,7 @@
 #ifdef CONFIG_ACPI
 #include <linux/acpi.h>
 #endif
+#include <linux/workqueue.h>
 #include <linux/power_supply.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
@@ -102,7 +103,6 @@ nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	}
 
 	pm->cur = perflvl;
-	pm->dvfs.last_reclock = dev_priv->engine.timer.read(dev);
 	return 0;
 }
 
@@ -481,10 +481,11 @@ nouveau_hwmon_set_devfs(struct device *d, struct device_attribute *a,
 	if (value < 0 || value > 1)
 		return -EINVAL;
 
+	pm->dvfs.active = value;
 	if (value)
-		pm->dvfs.start(dev);
+		pm->counter.start(dev);
 	else
-		pm->dvfs.stop(dev);
+		pm->counter.stop(dev);
 
 	return count;
 }
@@ -792,6 +793,49 @@ nouveau_pm_acpi_event(struct notifier_block *nb, unsigned long val, void *data)
 }
 #endif
 
+static bool
+nouveau_pm_lower_perflvl(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
+	int i;
+
+	dvfs->wanted_perflvl = pm->cur;
+
+	/* find current perflvl */
+	for (i = 0; i < pm->nr_perflvl; i++) {
+		if (pm->cur == &pm->perflvl[i]) {
+			/* downclock fast down to perflvl 2D only */
+			if (pm->perflvl[i].id <= dvfs->pl_idle->id)
+				return 1;
+
+			dvfs->wanted_perflvl = &pm->perflvl[i - 1];
+			return 0;
+		}
+	}
+
+	/* impossible or something is really fucked up! */
+	return 0;
+}
+
+static void
+nouveau_pm_reclock_work(struct work_struct *work)
+{
+	struct drm_device *dev = container_of(work, struct nouveau_pm_dvfs, reclock_work)->dev;
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
+
+	if (!dvfs->active && !dvfs->wanted_perflvl)
+		return;
+
+	if (!nouveau_pm_perflvl_set(dev, dvfs->wanted_perflvl))
+		dvfs->last_reclock = dev_priv->engine.timer.read(dev);
+	else if (!queue_work(system_unbound_wq, &dvfs->reclock_work))
+		NV_ERROR(dev, "error while rescheduling a reclock\n");
+}
+
 static void
 nouveau_pm_dvfs_init(struct drm_device *dev)
 {
@@ -799,10 +843,18 @@ nouveau_pm_dvfs_init(struct drm_device *dev)
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
 
+	/* init the reclocking workqueue */
+	dvfs->dev = dev;
+	INIT_WORK(&dvfs->reclock_work, nouveau_pm_reclock_work);
+
+	dvfs->active = 0;
+	dvfs->last_reclock = dev_priv->engine.timer.read(dev);
+	dvfs->last_usage = dev_priv->engine.timer.read(dev);
+	dvfs->wanted_perflvl = pm->cur;
 	dvfs->pl_idle = NULL;
 	dvfs->pl_2d = NULL;
 	dvfs->pl_max = NULL;
-	
+
 	if (pm->nr_perflvl == 0)
 		return;
 
@@ -819,30 +871,6 @@ nouveau_pm_dvfs_init(struct drm_device *dev)
 	dvfs->pl_max = &pm->perflvl[pm->nr_perflvl - 1];
 }
 
-static bool
-nouveau_pm_lower_perflvl(struct drm_device *dev)
-{
-	struct drm_nouveau_private *dev_priv = dev->dev_private;
-	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
-	struct nouveau_pm_dvfs *dvfs = &pm->dvfs;
-	int i;
-
-	/* find current perflvl */
-	for (i = 0; i < pm->nr_perflvl; i++) {
-		if (pm->cur == &pm->perflvl[i]) {
-			/* downclock fast down to perflvl 2D only */
-			if (pm->perflvl[i].id <= dvfs->pl_idle->id)
-				return 1;
-
-			nouveau_pm_perflvl_set(dev, &pm->perflvl[i - 1]);
-			return 0;
-		}
-	}
-
-	/* impossible or something is really fucked up! */
-	return 0;
-}
-
 void
 nouveau_pm_counter_update(struct drm_device *dev)
 {
@@ -857,6 +885,9 @@ nouveau_pm_counter_update(struct drm_device *dev)
 	if (!pm->dvfs.active)
 		return;
 
+	NV_INFO(dev, "nouveau_pm_counter_update1 decided to switch to perflvl %i,"
+		"last_reclock = %llu, last_usage = %llu\n", dvfs->wanted_perflvl->id, pm->dvfs.last_reclock, pm->dvfs.last_usage);
+
 	if (pm->counter.signal_value(dev, PGRAPH_IDLE, &val, &count))
 		return;
 
@@ -868,13 +899,20 @@ nouveau_pm_counter_update(struct drm_device *dev)
 	 * the transition between perflvl1 and 0 takes 10s
 	 */
 	if (pgraph_idle < 20) {
-		nouveau_pm_perflvl_set(dev, dvfs->pl_max);
+		dvfs->wanted_perflvl = dvfs->pl_max;
 		pm->dvfs.last_usage = dev_priv->engine.timer.read(dev);
 	} else if (interval_usage > 5000 && interval_reclock > 2000) {
 		if (nouveau_pm_lower_perflvl(dev) && interval_usage > 30000) {
-			nouveau_pm_perflvl_set(dev, dvfs->pl_idle);
+			dvfs->wanted_perflvl = dvfs->pl_idle;
 		}
 	}
+
+	NV_INFO(dev, "nouveau_pm_counter_update2 decided to switch to perflvl %i,"
+		"interval_reclock = %llu, interval_usage = %llu\n\n", dvfs->wanted_perflvl->id, interval_reclock, interval_usage);
+
+	if (dvfs->wanted_perflvl != pm->cur)
+		if (!queue_work(system_unbound_wq, &dvfs->reclock_work))
+			NV_ERROR(dev, "error while scheduling a reclock\n");
 }
 
 int
@@ -959,10 +997,20 @@ nouveau_pm_fini(struct drm_device *dev)
 #endif
 	nouveau_hwmon_fini(dev);
 	nouveau_sysfs_fini(dev);
-	
+
 	/* for dvfs */
 	if (pm->counter.takedown)
 		pm->counter.takedown(dev);
+}
+
+void
+nouveau_pm_suspend(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	pm->counter.stop(dev);
+	flush_workqueue(system_unbound_wq);
 }
 
 void

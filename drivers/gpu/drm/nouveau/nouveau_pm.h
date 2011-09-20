@@ -30,6 +30,7 @@ void nouveau_pm_counter_update(struct drm_device *dev);
 int  nouveau_pm_init(struct drm_device *dev);
 void nouveau_pm_fini(struct drm_device *dev);
 void nouveau_pm_resume(struct drm_device *dev);
+void nouveau_pm_suspend(struct drm_device *dev);
 
 /* nouveau_volt.c */
 void nouveau_volt_init(struct drm_device *);

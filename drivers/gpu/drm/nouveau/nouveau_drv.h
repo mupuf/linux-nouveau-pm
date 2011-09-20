@@ -554,6 +554,7 @@ struct nouveau_pm_counter {
 	bool state;
 
 	/* the 8 sets * 4 counters */
+	spinlock_t counter_lock;
 	enum nouveau_counter_signal signals[8][4];
 	struct {
 		u32 cycles;
@@ -572,10 +573,14 @@ struct nouveau_pm_counter {
 };
 
 struct nouveau_pm_dvfs {
+	struct drm_device *dev;
+	struct work_struct reclock_work;
+
 	bool active;
 	u64 last_reclock;
 	u64 last_usage;
-	
+	struct nouveau_pm_level *wanted_perflvl;
+
 	struct nouveau_pm_level *pl_idle;
 	struct nouveau_pm_level *pl_2d;
 	struct nouveau_pm_level *pl_max;

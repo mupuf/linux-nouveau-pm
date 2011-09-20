@@ -162,7 +162,10 @@ pcounter_counters_readout(struct drm_device *dev, bool init)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_counter *counter = &dev_priv->engine.pm.counter;
+	unsigned long flags;
 	int s;
+
+	spin_lock_irqsave(&counter->counter_lock, flags);
 
 	u32 debug1 = nv_rd32(dev, 0x400084);
 	nv_wr32(dev, 0x400084, debug1 | 0x20);
@@ -174,6 +177,8 @@ pcounter_counters_readout(struct drm_device *dev, bool init)
 		counter->sets[s].signals[2] = nv_rd32(dev, 0xa680 + s * 4);
 		counter->sets[s].signals[3] = nv_rd32(dev, 0xa740 + s * 4);
 	}
+
+	spin_unlock_irqrestore(&counter->counter_lock, flags);
 
 	if (!init && counter->state && counter->on_update)
 		counter->on_update(dev);
@@ -215,12 +220,15 @@ nv40_counter_start(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_counter *counter = &dev_priv->engine.pm.counter;
+	unsigned long flags;
 	u8 timer_b12_sig;
 	u8 pgraph_idle_sig;
 	u8 pgraph_intr_sig;
 	u8 ctxprog_active_sig;
 
 	/* no need to tweak enable on nv40 */
+
+	spin_lock_irqsave(&counter->counter_lock, flags);
 
 	nv40_counter_signal(dev, TIMER_B12, NULL, &timer_b12_sig);
 	nv40_counter_signal(dev, PGRAPH_IDLE, NULL, &pgraph_idle_sig);
@@ -233,6 +241,8 @@ nv40_counter_start(struct drm_device *dev)
 
 	counter->state = 1;
 
+	spin_unlock_irqrestore(&counter->counter_lock, flags);
+
 	pcounter_counters_readout(dev, 1);
 }
 
@@ -241,8 +251,11 @@ nv40_counter_stop(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_counter *counter = &dev_priv->engine.pm.counter;
+	unsigned long flags;
 
+	spin_lock_irqsave(&counter->counter_lock, flags);
 	counter->state = 0;
+	spin_unlock_irqrestore(&counter->counter_lock, flags);
 
 	del_timer_sync(&counter->readout_timer);
 }
@@ -253,16 +266,21 @@ nv40_counter_value(struct drm_device *dev, enum nouveau_counter_signal signal,
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_counter *counter = &dev_priv->engine.pm.counter;
+	unsigned long flags;
 	u8 set, sig, i;
 
 	nv40_counter_signal(dev, signal, &set, &sig);
+
+	spin_lock_irqsave(&counter->counter_lock, flags);
 	for (i = 0; i < 4; i++) {
 		if (counter->signals[set][i] == sig) {
 			*count = counter->sets[set].cycles;
 			*val = counter->sets[set].signals[i];
+			spin_unlock_irqrestore(&counter->counter_lock, flags);
 			return 0;
 		}
 	}
+	spin_unlock_irqrestore(&counter->counter_lock, flags);
 
 	return -ENOENT;
 }
