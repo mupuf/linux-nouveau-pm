@@ -180,7 +180,7 @@ static void
 nouveau_hdmi_audio_infoframe(struct drm_encoder *encoder,
 			     struct drm_display_mode *mode)
 {
-	const u8 CT = 0x00, CC = 0x01, SS = 0x00, SF = 0x00, FMT = 0x00;
+	const u8 CT = 0x00, CC = 0x01, ceaSS = 0x00, SF = 0x00, FMT = 0x00;
 	const u8 CA = 0x00, DM_INH = 0, LSV = 0x00;
 	u8 frame[12];
 
@@ -189,7 +189,7 @@ nouveau_hdmi_audio_infoframe(struct drm_encoder *encoder,
 	frame[0x02] = 0x0a;	/* length */
 	frame[0x03] = 0x00;
 	frame[0x04] = (CT << 4) | CC;
-	frame[0x05] = (SF << 2) | SS;
+	frame[0x05] = (SF << 2) | ceaSS;
 	frame[0x06] = FMT;
 	frame[0x07] = CA;
 	frame[0x08] = (DM_INH << 7) | (LSV << 3);
