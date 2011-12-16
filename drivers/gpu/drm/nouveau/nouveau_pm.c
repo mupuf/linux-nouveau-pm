@@ -178,10 +178,6 @@ nouveau_pm_profile_set(struct drm_device *dev, const char *profile)
 	int ret = 0;
 	long pl;
 
-	/* safety precaution, for now */
-	if (nouveau_perflvl_wr != 7777)
-		return -EPERM;
-
 	if (!strncmp(profile, "boot", 4))
 		perflvl = &pm->boot;
 	else {
@@ -550,9 +546,6 @@ nouveau_hwmon_set_pwm0(struct device *d, struct device_attribute *a,
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	int ret = -ENODEV;
 	long value;
-
-	if (nouveau_perflvl_wr != 7777)
-		return -EPERM;
 
 	if (kstrtol(buf, 10, &value) == -EINVAL)
 		return -EINVAL;
