@@ -74,13 +74,15 @@ legacy_perf_init(struct drm_device *dev)
 
 static struct nouveau_pm_memtiming *
 nouveau_perf_timing(struct drm_device *dev, struct bit_entry *P,
-		    u16 memclk, u8 *entry, u8 recordlen, u8 entries)
+		    u16 memclk, u8 *entry, u8 recordlen, u8 entries, bool *drop)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	struct nvbios *bios = &dev_priv->vbios;
 	u8 ramcfg;
 	int i;
+
+	*drop = true;
 
 	/* perf v2 has a separate "timing map" table, we have to match
 	 * the target memory clock to a specific entry, *then* use
@@ -127,11 +129,14 @@ nouveau_perf_timing(struct drm_device *dev, struct bit_entry *P,
 
 	entry += ramcfg * recordlen;
 	if (entry[1] >= pm->memtimings.nr_timing) {
-		if (entry[1] != 0xff)
+		if (entry[1] == 0xff)
+			*drop = false;
+		else
 			NV_WARN(dev, "timingset %d does not exist\n", entry[1]);
 		return NULL;
 	}
 
+	*drop = false;
 	return &pm->memtimings.timing[entry[1]];
 }
 
@@ -189,6 +194,7 @@ nouveau_perf_init(struct drm_device *dev)
 	u8 version, headerlen, recordlen, entries;
 	u8 *perf, *entry;
 	int vid, i;
+	bool drop;
 
 	if (bios->type == NVBIOS_BIT) {
 		if (bit_table(dev, 'P', &P))
@@ -344,9 +350,6 @@ nouveau_perf_init(struct drm_device *dev)
 		/* get the corresponding memory timings */
 		if (version == 0x15) {
 			memtimings->timing[i].id = i;
-			nv30_mem_timing_entry(dev, &mt_hdr,
-				     (struct nouveau_pm_tbl_entry *) &entry[41],
-				     0, &memtimings->timing[i]);
 			perflvl->timing = &memtimings->timing[i];
 		} else if (version > 0x15) {
 			/* last 3 args are for < 0x40, ignored for >= 0x40 */
@@ -354,7 +357,13 @@ nouveau_perf_init(struct drm_device *dev)
 				nouveau_perf_timing(dev, &P,
 						    perflvl->memory / 1000,
 						    entry + perf[3],
-						    perf[5], perf[4]);
+						    perf[5], perf[4],
+						    &drop);
+			if (drop) {
+				NV_DEBUG(dev, "drop perflvl %d, bad timings\n", i);
+				entry += recordlen;
+				continue;
+			}
 		}
 
 		snprintf(perflvl->name, sizeof(perflvl->name),
