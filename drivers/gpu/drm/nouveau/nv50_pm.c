@@ -415,18 +415,80 @@ clk_same(u32 a, u32 b)
 	return ((a / 1000) == (b / 1000));
 }
 
+static void
+nv50_pm_ddr2_hwsq_post(struct drm_device *dev, struct hwsq_ucode *hwsq,
+		       struct nouveau_pm_memtiming *timing) {
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	hwsq_wr32(hwsq, 0x1002c4, timing->mr[1]);
+	/* Specs say DLL resets automatically when leaving self-refresh
+	 * but doesn't harm either */
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0] | 0x100);
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0]);
+	if (dev_priv->vram_rank_B) {
+		hwsq_wr32(hwsq, 0x1002cc, timing->mr[1]);
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0] | 0x100);
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0]);
+	}
+	hwsq_usec(hwsq, 2); /* wait a few Âµs (perhaps too much?)*/
+}
+
+static void
+nv50_pm_ddr3_hwsq_post(struct drm_device *dev, struct hwsq_ucode *hwsq,
+		       struct nouveau_pm_memtiming *timing) {
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	hwsq_wr32(hwsq, 0x1002e0, timing->mr[2]);
+	hwsq_wr32(hwsq, 0x1002c4, timing->mr[1]);
+	/* Specs say DLL resets automatically when leaving self-refresh
+	 * but doesn't harm either */
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0] | 0x100);
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0]);
+	if (dev_priv->vram_rank_B) {
+		hwsq_wr32(hwsq, 0x1002e8, timing->mr[2]);
+		hwsq_wr32(hwsq, 0x1002cc, timing->mr[1]);
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0] | 0x100);
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0]);
+	}
+	hwsq_usec(hwsq, 12); /* wait a few Âµs (perhaps too much?)*/
+}
+
+static void
+nv50_pm_gddr3_hwsq_post(struct drm_device *dev, struct hwsq_ucode *hwsq,
+			struct nouveau_pm_memtiming *timing) {
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	hwsq_wr32(hwsq, 0x1002c4, timing->mr[1]);
+	if (dev_priv->vram_rank_B)
+		hwsq_wr32(hwsq, 0x1002cc, timing->mr[1]);
+	/* Reset DLL */
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0] | 0x100);
+	hwsq_wr32(hwsq, 0x1002c0, timing->mr[0]);
+	if (dev_priv->vram_rank_B) {
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0] | 0x100);
+		hwsq_wr32(hwsq, 0x1002c8, timing->mr[0]);
+	}
+	hwsq_usec(hwsq, 1);
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge again */
+	hwsq_usec(hwsq, 24); /* wait for DLL to stabilize (40us) */
+	hwsq_usec(hwsq, 16);
+}
+
 static int
-calc_mclk(struct drm_device *dev, u32 freq, struct hwsq_ucode *hwsq)
+calc_mclk(struct drm_device *dev,
+	struct nouveau_pm_level *perflvl,
+	struct hwsq_ucode *hwsq)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct pll_lims pll;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_memtiming *timing = perflvl->timing;
 	u32 mast = nv_rd32(dev, 0x00c040);
 	u32 ctrl = nv_rd32(dev, 0x004008);
 	u32 coef = nv_rd32(dev, 0x00400c);
 	u32 orig = ctrl;
 	u32 crtc_mask = 0;
+	u32 freq = perflvl->memory;
 	int N, M, P;
 	int ret, i;
+	u32 full_reclock = 0;
 
 	/* use pcie refclock if possible, otherwise use mpll */
 	ctrl &= ~0x81ff0200;
@@ -449,6 +511,22 @@ calc_mclk(struct drm_device *dev, u32 freq, struct hwsq_ucode *hwsq)
 	for (i = 0; i < 2; i++) {
 		if (nv_rd32(dev, NV50_PDISPLAY_CRTC_C(i, CLOCK)))
 			crtc_mask |= (1 << i);
+	}
+
+	/* Full reclocking capable? */
+	if (timing) {
+		switch (dev_priv->vram_type) {
+		case NV_MEM_TYPE_DDR2:
+		case NV_MEM_TYPE_DDR3:
+		case NV_MEM_TYPE_GDDR3:
+			full_reclock = 0xff;
+			break;
+		default:
+			NV_WARN(dev, "Attempting unsafe memory reclock.");
+			break;
+		}
+	} else {
+		NV_WARN(dev, "Attempting unsafe memory reclock.");
 	}
 
 	/* build the ucode which will reclock the memory for us */
@@ -478,9 +556,34 @@ calc_mclk(struct drm_device *dev, u32 freq, struct hwsq_ucode *hwsq)
 	hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* precharge banks and idle */
 	hwsq_wr32(hwsq, 0x1002dc, 0x00000000); /* stop self refresh mode */
 	hwsq_wr32(hwsq, 0x100210, 0x80000000); /* restart automatic refresh */
-	hwsq_usec(hwsq, 12); /* wait for the PLL to stabilize */
+	hwsq_usec(hwsq, 12); /* wait tXSRD... roughly */
 
-	hwsq_usec(hwsq, 48); /* may be unnecessary: causes flickering */
+	if (full_reclock) {
+		/* Write memory timings */
+		if (pm->memtimings.supported && timing->id >= 0) {
+			for (i = 0; i < 9; i++)
+				hwsq_wr32(hwsq, 0x100220 + (i * 4), timing->reg[i]);
+		}
+		/* Update the MRs and reset DLL */
+		switch (dev_priv->vram_type) {
+		case NV_MEM_TYPE_DDR2:
+			nv50_pm_ddr2_hwsq_post(dev, hwsq, timing);
+			break;
+		case NV_MEM_TYPE_DDR3:
+			nv50_pm_ddr3_hwsq_post(dev, hwsq, timing);
+			break;
+		case NV_MEM_TYPE_GDDR3:
+			nv50_pm_gddr3_hwsq_post(dev, hwsq, timing);
+			break;
+		default:
+			break;
+		}
+		if(timing->odt > 0)
+			hwsq_wr32(hwsq, 0x1002d4, 0x00000001); /* Precharge */
+		hwsq_wr32(hwsq, 0x1002d0, 0x00000001); /* force refresh */
+	} else {
+		hwsq_usec(hwsq, 48); /* may be unnecessary: causes flickering */
+	}
 	hwsq_setf(hwsq, 0x10, 1); /* enable bus access */
 	hwsq_op5f(hwsq, 0x00, 0x00); /* no idea, reverse of 0x00, 0x01? */
 	if (dev_priv->chipset >= 0x92)
@@ -539,7 +642,7 @@ nv50_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	/* memory: build hwsq ucode which we'll use to reclock memory */
 	info->mclk_hwsq.len = 0;
 	if (perflvl->memory) {
-		clk = calc_mclk(dev, perflvl->memory, &info->mclk_hwsq);
+		clk = calc_mclk(dev, perflvl, &info->mclk_hwsq);
 		if (clk < 0) {
 			ret = clk;
 			goto error;
@@ -673,8 +776,10 @@ nv50_pm_clocks_set(struct drm_device *dev, void *data)
 		}
 
 		ret = prog_mclk(dev, &info->mclk_hwsq);
-		if (ret)
+		if (ret) {
+			ret = -EIO;
 			goto resume;
+		}
 	}
 
 	/* reclock vdec/dom6 */
