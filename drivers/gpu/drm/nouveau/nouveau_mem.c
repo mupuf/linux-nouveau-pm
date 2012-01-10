@@ -1052,7 +1052,7 @@ nouveau_mem_timing_init(struct drm_device *dev)
 	}
 
 	memtimings->nr_timing = hdr->entry_cnt;
-	memtimings->supported = (P.version == 1) && valid_generation;
+	memtimings->supported = (P.version == 1);
 
 	/* if there are no timing entries that cannot
 	 * re-generate the current timings
