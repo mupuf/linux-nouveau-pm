@@ -74,6 +74,11 @@
 #define CP_FLAG_INTR_NOT_PENDING      0
 #define CP_FLAG_INTR_PENDING          1
 
+/* CTXCTL_FLAGS_3: should only be written by host ! */
+#define CP_FLAG_PM_XFER               ((3 * 32) + 0)
+#define CP_FLAG_PM_XFER_ENABLE        0
+#define CP_FLAG_PM_XFER_DISABLE       1
+
 #define CP_CTX                   0x00100000
 #define CP_CTX_COUNT             0x000f0000
 #define CP_CTX_COUNT_SHIFT               16
@@ -163,6 +168,7 @@ enum cp_label {
 	cp_setup_save,
 	cp_swap_state,
 	cp_prepare_exit,
+	cp_xfer,
 	cp_exit,
 };
 
@@ -263,13 +269,17 @@ nv50_grctx_init(struct nouveau_grctx *ctx)
 	cp_set (ctx, UNK03, CLEAR);
 	cp_set (ctx, UNK1D, CLEAR);
 
-	cp_bra (ctx, USER_SAVE, PENDING, cp_exit);
+	cp_bra (ctx, USER_SAVE, PENDING, cp_xfer);
 	cp_out (ctx, CP_NEXT_TO_CURRENT);
+
+	/* disable xfer unless we are told otherwise by the host */
+	cp_name(ctx, cp_xfer);
+	cp_bra (ctx, PM_XFER, DISABLE, cp_exit);
+	cp_set (ctx, XFER_SWITCH, DISABLE);
 
 	cp_name(ctx, cp_exit);
 	cp_set (ctx, USER_SAVE, NOT_PENDING);
 	cp_set (ctx, USER_LOAD, NOT_PENDING);
-	cp_set (ctx, XFER_SWITCH, DISABLE);
 	cp_set (ctx, STATE, STOPPED);
 	cp_out (ctx, CP_END);
 	ctx->ctxvals_pos += 0x400; /* padding... no idea why you need it */
