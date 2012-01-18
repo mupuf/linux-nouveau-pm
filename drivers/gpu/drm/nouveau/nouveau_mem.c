@@ -603,13 +603,13 @@ nvc0_mem_timing_entry(struct drm_device *dev, struct nouveau_pm_tbl_header *hdr,
 	t->reg[1] = (boot->reg[1] & 0xff000000) |
 		    (e->tRCDWR & 0x0f) << 20 |
 		    (e->tRCDRD & 0x0f) << 14 |
-		    (e->tCWL << 7) |
+		    (t->tCWL << 7) |
 		    (e->tCL & 0x0f);
 
 	t->reg[2] = (boot->reg[2] & 0xff0000ff) |
 		    e->tWR << 16 | e->tWTR << 8;
 
-	t->reg[3] = (e->tUNK_20 & 0xf) << 9 |
+	t->reg[3] = (e->tUNK_20 & 0x1f) << 9 |
 		    (e->tUNK_21 & 0xf) << 5 |
 		    (e->tUNK_13 & 0x1f);
 
@@ -841,6 +841,8 @@ nouveau_mem_copy_current_timings(struct drm_device *dev,
 	t->tCWL = 0;
 	if (dev_priv->card_type < NV_C0) {
 		t->tCWL = ((nv_rd32(dev, 0x100228) & 0x0f000000) >> 24) + 1;
+	} else {
+		t->tCWL = ((nv_rd32(dev, 0x10f294) & 0x00000f80) >> 7);
 	}
 
 	t->mr[0] = nv_rd32(dev, mr_base);
