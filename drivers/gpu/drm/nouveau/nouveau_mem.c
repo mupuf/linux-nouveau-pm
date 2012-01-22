@@ -780,6 +780,7 @@ nouveau_mem_gddr5_mr(struct drm_device *dev, u32 freq,
 		     struct nouveau_pm_memtiming *boot,
 		     struct nouveau_pm_memtiming *t)
 {
+	u8 add_term; /* CMD/ADD termination */
 	if (len < 15) {
 		t->drive_strength = boot->drive_strength;
 		t->odt = boot->odt;
@@ -798,18 +799,24 @@ nouveau_mem_gddr5_mr(struct drm_device *dev, u32 freq,
 		return -ERANGE;
 	}
 
-	if (t->odt > 3) {
+	if (t->odt > 2) {
 		NV_WARN(dev, "(%u) Invalid odt value, assuming autocal: %x",
 			t->id, t->odt);
 		t->odt = 0;
 	}
 
+	if (t->odt)
+		add_term = t->odt;
+	else
+		add_term = 3;
+
 	t->mr[0] = (boot->mr[0] & 0x007) |
 		   ((e->tCL - 5) << 3) |
 		   ((e->tWR - 4) << 8);
-	t->mr[1] = (boot->mr[1] & 0x1007f0) |
+	t->mr[1] = (boot->mr[1] & 0x1007c0) |
 		   t->drive_strength |
-		   (t->odt << 2);
+		   (t->odt << 2) |
+		   (add_term << 4);
 
 	NV_DEBUG(dev, "(%u) MR: %08x %08x", t->id, t->mr[0], t->mr[1]);
 	return 0;
@@ -937,9 +944,15 @@ nouveau_mem_timing_read(struct drm_device *dev, struct nouveau_pm_memtiming *t)
 	}
 
 	t->mr[0] = nv_rd32(dev, mr_base);
-	t->mr[1] = nv_rd32(dev, mr_base + 0x04);
-	t->mr[2] = nv_rd32(dev, mr_base + 0x20);
-	t->mr[3] = nv_rd32(dev, mr_base + 0x24);
+	if (dev_priv->vram_type == NV_MEM_TYPE_GDDR5 &&
+		dev_priv->card_type >= 0xC0) {
+		for (i = 0; i < 8; i++)
+			t->mr[i+1] = nv_rd32(dev, mr_base + 0x30 + (i * 4));
+	} else {
+		t->mr[1] = nv_rd32(dev, mr_base + 0x04);
+		t->mr[2] = nv_rd32(dev, mr_base + 0x20);
+		t->mr[3] = nv_rd32(dev, mr_base + 0x24);
+	}
 
 	t->odt = 0;
 	t->drive_strength = 0;
