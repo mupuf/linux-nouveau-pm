@@ -446,7 +446,7 @@ struct nouveau_pm_memtiming {
 	int id;
 
 	u32 reg[9];
-	u32 mr[4];
+	u32 mr[9];
 
 	u8 tCWL;
 
