@@ -27,6 +27,7 @@
 #include "nouveau_drv.h"
 #include "nouveau_pm.h"
 #include "nouveau_gpio.h"
+#include "nouveau_crtc.h"
 
 #ifdef CONFIG_ACPI
 #include <linux/acpi.h>
@@ -175,7 +176,8 @@ nouveau_pm_trigger(struct drm_device *dev)
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	struct nouveau_pm_profile *profile = NULL;
 	struct nouveau_pm_level *perflvl = NULL;
-	int ret;
+	struct drm_crtc *crtc;
+	int ret, w = 0, h = 0;
 
 	/* select power profile based on current power source */
 	if (power_supply_is_system_supplied())
@@ -185,6 +187,25 @@ nouveau_pm_trigger(struct drm_device *dev)
 
 	/* select performance level based on profile */
 	perflvl = profile->func->select(profile);
+
+	/* adjust profile-requested perflvl to account for memory bandwidth
+	 * requirements etc.  until we have something better, we're only
+	 * implementing basically what the binary driver appears to achieve
+	 * by whatever heuristics it uses - essentially: if using dual-head
+	 * or a large resolution, force maximum performance level
+	 */
+	if (perflvl != &pm->boot) {
+		list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
+			struct nouveau_crtc *nv_crtc = nouveau_crtc(crtc);
+			if (nv_crtc->last_dpms == DRM_MODE_DPMS_ON) {
+				w += crtc->mode.hdisplay;
+				h += crtc->mode.vdisplay;
+			}
+		}
+
+		if (w * h > 1920 * 1200)
+			perflvl = &pm->perflvl[pm->nr_perflvl - 1];
+	}
 
 	/* change perflvl, if necessary */
 	if (perflvl != pm->cur) {
