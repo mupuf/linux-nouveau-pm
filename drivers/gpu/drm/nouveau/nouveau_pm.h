@@ -44,8 +44,10 @@ int  nouveau_mem_exec(struct nouveau_mem_exec_func *,
 		      struct nouveau_pm_level *);
 
 /* nouveau_pm.c */
+void nouveau_pm_counter_update(struct drm_device *dev);
 int  nouveau_pm_init(struct drm_device *dev);
 void nouveau_pm_fini(struct drm_device *dev);
+void nouveau_pm_suspend(struct drm_device *dev);
 void nouveau_pm_resume(struct drm_device *dev);
 extern const struct nouveau_pm_profile_func nouveau_pm_static_profile_func;
 void nouveau_pm_trigger(struct drm_device *dev);
@@ -105,5 +107,20 @@ void nouveau_temp_fini(struct drm_device *dev);
 void nouveau_temp_safety_checks(struct drm_device *dev);
 int nv40_temp_get(struct drm_device *dev);
 int nv84_temp_get(struct drm_device *dev);
+
+/* nouveau_counter.c */
+int nouveau_counter_init(struct drm_device *dev);
+void nouveau_counter_fini(struct drm_device *dev);
+void nouveau_counter_suspend(struct drm_device *dev);
+void nouveau_counter_resume(struct drm_device *dev);
+int nouveau_counter_watch_signal(struct drm_device *dev,
+			enum nouveau_counter_signal);
+int nouveau_counter_unwatch_signal(struct drm_device *dev,
+			enum nouveau_counter_signal);
+void nouveau_counter_poll(struct drm_device *dev);
+void nouveau_counter_start(struct drm_device *dev);
+void nouveau_counter_stop(struct drm_device *dev);
+int nouveau_counter_value(struct drm_device *,
+			enum nouveau_counter_signal, u32 *, u32 *);
 
 #endif

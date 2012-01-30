@@ -45,6 +45,8 @@
 #include "ttm/ttm_memory.h"
 #include "ttm/ttm_module.h"
 
+#include <linux/timer.h>
+
 struct nouveau_fpriv {
 	spinlock_t lock;
 	struct list_head channels;
@@ -550,6 +552,45 @@ struct nouveau_pm_fan {
 	u32 pwm_divisor;
 };
 
+enum nouveau_counter_signal {
+	SIG_NONE = 0,
+	SIG_HOST_MEM_WR,
+	SIG_HOST_MEM_RD,
+	SIG_PBUS_PCIE_RD,
+	SIG_PTIMER_TIME_B12,
+	SIG_PBUS_PCIE_TRANS,
+	SIG_PBUS_PCIE_WR,
+	SIG_PGRAPH_IDLE,
+	SIG_PGRAPH_INTR_PENDING,
+	SIG_CTXFLAG_1c,
+	SIG_CTXFLAG_1d,
+	SIG_CTXFLAG_1e,
+	SIG_CTXFLAG_1f,
+	SIG_MAX
+};
+
+struct nouveau_pm_counter {
+	atomic_t enabled;
+	atomic_t periodic_polling;
+	atomic_t must_reprogram;
+	spinlock_t counter_lock;
+	struct nouveau_pm_counter_wd {
+		struct delayed_work d_work;
+		struct workqueue_struct *queue;
+		struct drm_device *dev;
+	} work_data;
+
+	/* nv40: the 8 sets * 4 counters */
+	enum nouveau_counter_signal signals[8][4];
+	struct device_attribute sysfs_attr[8][4];
+	struct {
+		u32 cycles;
+		u32 signals[4];
+	} sets[8];
+
+	void (*on_update)(struct drm_device *);
+};
+
 enum nouveau_pm_engine_state {
 	PM_DISABLED,
 	PM_INIT,
@@ -565,6 +606,7 @@ struct nouveau_pm_engine {
 	struct nouveau_pm_threshold_temp threshold_temp;
 	struct nouveau_pm_fan fan;
 	struct semaphore reclock_lock;
+	struct nouveau_pm_counter counter;
 	enum nouveau_pm_engine_state reclock_state;
 
 	struct nouveau_pm_profile *profile_ac;

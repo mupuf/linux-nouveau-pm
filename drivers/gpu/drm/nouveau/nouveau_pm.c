@@ -35,6 +35,8 @@
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 
+#include <asm/div64.h>
+
 static int
 nouveau_pwmfan_get(struct drm_device *dev)
 {
@@ -990,6 +992,8 @@ nouveau_pm_init(struct drm_device *dev)
 	register_acpi_notifier(&pm->acpi_nb);
 #endif
 
+	nouveau_counter_init(dev);
+
 	return 0;
 }
 
@@ -1008,6 +1012,7 @@ nouveau_pm_fini(struct drm_device *dev)
 	if (pm->cur != &pm->boot)
 		nouveau_pm_perflvl_set(dev, &pm->boot);
 
+	nouveau_counter_fini(dev);
 	nouveau_temp_fini(dev);
 	nouveau_perf_fini(dev);
 	nouveau_volt_fini(dev);
@@ -1020,11 +1025,19 @@ nouveau_pm_fini(struct drm_device *dev)
 }
 
 void
+nouveau_pm_suspend(struct drm_device *dev)
+{
+	nouveau_counter_suspend(dev);
+}
+
+void
 nouveau_pm_resume(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
 	struct nouveau_pm_level *perflvl;
+
+	nouveau_counter_resume(dev);
 
 	if (!pm->cur || pm->cur == &pm->boot)
 		return;
