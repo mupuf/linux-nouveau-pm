@@ -369,6 +369,7 @@ static int nouveau_init_engine_ptrs(struct drm_device *dev)
 			engine->pm.temp_get	= nv40_temp_get;
 		engine->pm.pwm_get		= nv50_pm_pwm_get;
 		engine->pm.pwm_set		= nv50_pm_pwm_set;
+		engine->pm.counter.on_update	= nouveau_pm_trigger;
 		engine->vram.init		= nv50_vram_init;
 		engine->vram.takedown		= nv50_vram_fini;
 		engine->vram.get		= nv50_vram_new;

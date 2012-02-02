@@ -264,13 +264,13 @@ nouveau_pm_trigger(struct drm_device *dev)
 		profile = pm->profile_dc;
 
 	if (profile != pm->profile) {
-		pm->profile->func->fini(pm->profile);
+		pm->profile->func->fini(dev, pm->profile);
 		pm->profile = profile;
-		pm->profile->func->init(pm->profile);
+		pm->profile->func->init(dev, pm->profile);
 	}
 
 	/* select performance level based on profile */
-	perflvl = profile->func->select(profile);
+	perflvl = profile->func->select(dev, profile);
 
 	/* change perflvl, if necessary */
 	if (perflvl != pm->cur) {
@@ -339,12 +339,14 @@ nouveau_pm_profile_set(struct drm_device *dev, const char *profile)
 }
 
 static void
-nouveau_pm_static_dummy(struct nouveau_pm_profile *profile)
+nouveau_pm_static_dummy(struct drm_device *dev,
+			struct nouveau_pm_profile *profile)
 {
 }
 
 static struct nouveau_pm_level *
-nouveau_pm_static_select(struct nouveau_pm_profile *profile)
+nouveau_pm_static_select(struct drm_device *dev,
+			 struct nouveau_pm_profile *profile)
 {
 	return container_of(profile, struct nouveau_pm_level, profile);
 }
@@ -354,6 +356,141 @@ const struct nouveau_pm_profile_func nouveau_pm_static_profile_func = {
 	.init = nouveau_pm_static_dummy,
 	.fini = nouveau_pm_static_dummy,
 	.select = nouveau_pm_static_select,
+};
+
+struct nouveau_pm_profile_dynamic_priv {
+	u64 last_reclock;
+	u64 last_usage;
+
+	struct nouveau_pm_level *pl_idle;
+	struct nouveau_pm_level *pl_2d;
+	struct nouveau_pm_level *pl_max;
+} nouveau_pm_dynamic_profile_priv;
+
+static void
+nouveau_pm_dynamic_init(struct drm_device *dev,
+			struct nouveau_pm_profile *profile)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_profile_dynamic_priv *dvfs = profile->user;
+
+	/* reset the current state */
+	memset(dvfs, 0, sizeof(*dvfs));
+
+	if (pm->nr_perflvl == 0)
+		return;
+
+	/* the idle perflvl (long inactivity) */
+	dvfs->pl_idle = &pm->perflvl[0];
+
+	/* minimum performance wanted (short inactivity) */
+	if (pm->nr_perflvl > 2)
+		dvfs->pl_2d = &pm->perflvl[1];
+	else
+		dvfs->pl_2d = &pm->perflvl[0];
+
+	/* the maximum perflvl that will be set when the GPU is used */
+	dvfs->pl_max = &pm->perflvl[pm->nr_perflvl - 1];
+
+	/* start monitoring PGRAPH's usage */
+	if (nouveau_counter_watch_signal(dev, SIG_PGRAPH_IDLE))
+		NV_ERROR(dev, "counter: No space left to watch signal"
+			      "SIG_PGRAPH_IDLE!\n");
+
+	nouveau_counter_start(dev);
+}
+
+static void
+nouveau_pm_dynamic_fini(struct drm_device *dev,
+			struct nouveau_pm_profile *profile)
+{
+	nouveau_counter_stop(dev);
+	nouveau_counter_unwatch_signal(dev, SIG_PGRAPH_IDLE);
+}
+
+static struct nouveau_pm_level *
+nouveau_pm_dynamic_lower_perflvl(struct drm_device *dev,
+				 struct nouveau_pm_profile *profile)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_profile_dynamic_priv *dvfs = profile->user;
+	int i;
+
+	/* find current perflvl */
+	for (i = 0; i < pm->nr_perflvl; i++) {
+		if (pm->cur == &pm->perflvl[i]) {
+			/* downclock fast down to perflvl 2D only */
+			if (pm->perflvl[i].id <= dvfs->pl_idle->id)
+				return pm->cur;
+
+			return &pm->perflvl[i - 1];
+		}
+	}
+
+	/* impossible or something is really fucked up! */
+	return &pm->boot;
+}
+
+static struct nouveau_pm_level *
+nouveau_pm_dynamic_select(struct drm_device *dev,
+			  struct nouveau_pm_profile *profile)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+	struct nouveau_pm_profile_dynamic_priv *dvfs = profile->user;
+	u64 interval_reclock =
+	      (dev_priv->engine.timer.read(dev) - dvfs->last_reclock) / 1000000;
+	u64 interval_usage =
+		(dev_priv->engine.timer.read(dev) - dvfs->last_usage) / 1000000;
+	struct nouveau_pm_level *target = pm->cur;
+	u64 pgraph_idle;
+	u32 val, count;
+
+	if (nouveau_counter_value(dev, SIG_PGRAPH_IDLE, &val, &count))
+		return pm->cur;
+
+	/* if the signal's value isn't ready yet */
+	if (!count)
+		return pm->cur;
+
+	pgraph_idle = val * 100;
+	do_div(pgraph_idle, count);
+
+	/*NV_INFO(dev, "nouveau_pm_dynamic_select: pm->cur = %i,
+		interval_reclock = %llu, interval_usage = %llu\n\n",
+		pm->cur->id, interval_reclock, interval_usage);*/
+
+	/* upclock as soon PGRAPH is used
+	 * starts declocking after 5s of inactivity
+	 * the transition between perflvl1 and 0 takes 10s
+	 */
+	if (pgraph_idle < 20) {
+		dvfs->last_usage = dev_priv->engine.timer.read(dev);
+		target = dvfs->pl_max;
+	} else if (interval_usage > 5000 && interval_reclock > 2000) {
+		struct nouveau_pm_level *lvl =
+				nouveau_pm_dynamic_lower_perflvl(dev, profile);
+
+		if (lvl != dvfs->pl_idle || interval_usage > 30000)
+			target = lvl;
+		/*else
+			target = dvfs->pl_idle;*/
+	}
+
+	/* reset the last_reclock timestamp */
+	if (target != pm->cur)
+		dvfs->last_reclock = dev_priv->engine.timer.read(dev);
+
+	return target;
+}
+
+const struct nouveau_pm_profile_func nouveau_pm_dynamic_profile_func = {
+	.destroy = nouveau_pm_static_dummy,
+	.init = nouveau_pm_dynamic_init,
+	.fini = nouveau_pm_dynamic_fini,
+	.select = nouveau_pm_dynamic_select,
 };
 
 static int
@@ -951,13 +1088,18 @@ nouveau_pm_init(struct drm_device *dev)
 	strncpy(pm->boot.profile.name, "boot", 4);
 	pm->boot.profile.func = &nouveau_pm_static_profile_func;
 
-	INIT_LIST_HEAD(&pm->profiles);
-	list_add(&pm->boot.profile.head, &pm->profiles);
-
 	pm->profile_ac = &pm->boot.profile;
 	pm->profile_dc = &pm->boot.profile;
 	pm->profile = &pm->boot.profile;
 	pm->cur = &pm->boot;
+
+	strncpy(pm->profile_dynpm.name, "dynamic", 7);
+	pm->profile_dynpm.func = &nouveau_pm_dynamic_profile_func;
+	pm->profile_dynpm.user = &nouveau_pm_dynamic_profile_priv;
+
+	INIT_LIST_HEAD(&pm->profiles);
+	list_add(&pm->boot.profile.head, &pm->profiles);
+	list_add(&pm->profile_dynpm.head, &pm->profiles);
 
 	/* add performance levels from vbios */
 	nouveau_perf_init(dev);
@@ -1006,7 +1148,7 @@ nouveau_pm_fini(struct drm_device *dev)
 
 	list_for_each_entry_safe(profile, tmp, &pm->profiles, head) {
 		list_del(&profile->head);
-		profile->func->destroy(profile);
+		profile->func->destroy(dev, profile);
 	}
 
 	if (pm->cur != &pm->boot)
