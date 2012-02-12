@@ -131,6 +131,75 @@ nouveau_pm_perflvl_aux(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 	return 0;
 }
 
+int
+nouveau_pm_state_acquire_lock(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	if (down_trylock(&pm->reclock_lock) == 0)
+		return 0;
+
+	switch (pm->reclock_state) {
+	case PM_DISABLED:
+		NV_WARN(dev, "Could not acquire PM engine lock: PM disabled");
+		return -ENOSYS;
+		break;
+	case PM_INIT:
+		NV_WARN(dev, "Could not acquire PM engine lock:"
+				" initialising");
+		return -EBUSY;
+		break;
+	case PM_RECLOCKING:
+		NV_WARN(dev, "Could not acquire PM engine lock:"
+				" engine busy");
+		return -EBUSY;
+		break;
+	default:
+		NV_WARN(dev, "Could not acquire PM engine lock:"
+				" unknown reason (%u)", pm->reclock_state);
+		break;
+	}
+
+
+	return -EIO;
+}
+
+void nouveau_pm_state_disable(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	if (pm->reclock_state == PM_DISABLED)
+		return;
+
+	/* Lock so reclocking fails... easiest check */
+	if (pm->reclock_state != PM_INIT)
+		down(&pm->reclock_lock);
+	pm->reclock_state = PM_DISABLED;
+}
+
+void nouveau_pm_state_enable(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	if (pm->reclock_state == PM_DISABLED ||
+		pm->reclock_state == PM_INIT) {
+		up(&pm->reclock_lock);
+		pm->reclock_state = PM_IDLE;
+	}
+}
+
+bool
+nouveau_pm_state_enabled(struct drm_device *dev)
+{
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
+	struct nouveau_pm_engine *pm = &dev_priv->engine.pm;
+
+	return (pm->reclock_state != PM_DISABLED);
+}
+
 static int
 nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 {
@@ -141,6 +210,11 @@ nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 
 	if (perflvl == pm->cur)
 		return 0;
+
+	ret = nouveau_pm_state_acquire_lock(dev);
+	if (ret)
+		return ret;
+	pm->reclock_state = PM_RECLOCKING;
 
 	ret = nouveau_pm_perflvl_aux(dev, perflvl, pm->cur, perflvl);
 	if (ret)
@@ -160,6 +234,10 @@ nouveau_pm_perflvl_set(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 		return ret;
 
 	pm->cur = perflvl;
+
+	pm->reclock_state = PM_IDLE;
+	up(&pm->reclock_lock);
+
 	return 0;
 
 error:
@@ -231,7 +309,7 @@ nouveau_pm_profile_set(struct drm_device *dev, const char *profile)
 	char string[16], *cur = string, *ptr;
 
 	/* safety precaution, for now */
-	if (nouveau_perflvl_wr != 7777)
+	if (!nouveau_pm_state_enabled(dev))
 		return -EPERM;
 
 	strncpy(string, profile, sizeof(string));
@@ -253,6 +331,7 @@ nouveau_pm_profile_set(struct drm_device *dev, const char *profile)
 
 	pm->profile_ac = ac;
 	pm->profile_dc = dc;
+
 	nouveau_pm_trigger(dev);
 	return 0;
 }
@@ -609,7 +688,7 @@ nouveau_hwmon_set_pwm0(struct device *d, struct device_attribute *a,
 	int ret = -ENODEV;
 	long value;
 
-	if (nouveau_perflvl_wr != 7777)
+	if (!nouveau_pm_state_enabled(dev))
 		return -EPERM;
 
 	if (kstrtol(buf, 10, &value) == -EINVAL)
@@ -852,6 +931,9 @@ nouveau_pm_init(struct drm_device *dev)
 	char info[256];
 	int ret, i;
 
+	sema_init(&pm->reclock_lock, 0);
+	pm->reclock_state = PM_INIT;
+
 	/* parse aux tables from vbios */
 	nouveau_volt_init(dev);
 	nouveau_temp_init(dev);
@@ -887,6 +969,12 @@ nouveau_pm_init(struct drm_device *dev)
 
 	nouveau_pm_perflvl_info(&pm->boot, info, sizeof(info));
 	NV_INFO(dev, "c:%s", info);
+
+	/* Enable pm if allowed. The lock is now no longer ours */
+	if (nouveau_perflvl_wr != 7777)
+		nouveau_pm_state_disable(dev);
+	else
+		nouveau_pm_state_enable(dev);
 
 	/* switch performance levels now if requested */
 	if (nouveau_perflvl != NULL)

@@ -550,6 +550,13 @@ struct nouveau_pm_fan {
 	u32 pwm_divisor;
 };
 
+enum nouveau_pm_engine_state {
+	PM_DISABLED,
+	PM_INIT,
+	PM_IDLE,
+	PM_RECLOCKING,
+};
+
 struct nouveau_pm_engine {
 	struct nouveau_pm_voltage voltage;
 	struct nouveau_pm_level perflvl[NOUVEAU_PM_MAX_LEVEL];
@@ -557,6 +564,8 @@ struct nouveau_pm_engine {
 	struct nouveau_pm_temp_sensor_constants sensor_constants;
 	struct nouveau_pm_threshold_temp threshold_temp;
 	struct nouveau_pm_fan fan;
+	struct semaphore reclock_lock;
+	enum nouveau_pm_engine_state reclock_state;
 
 	struct nouveau_pm_profile *profile_ac;
 	struct nouveau_pm_profile *profile_dc;
@@ -948,6 +957,10 @@ extern void nv10_mem_put_tile_region(struct drm_device *dev,
 				     struct nouveau_fence *fence);
 extern const struct ttm_mem_type_manager_func nouveau_vram_manager;
 extern const struct ttm_mem_type_manager_func nouveau_gart_manager;
+
+/* nouveau_pm.c */
+extern int nouveau_pm_state_acquire_lock(struct drm_device *dev);
+extern bool nouveau_pm_state_enabled(struct drm_device *dev);
 
 /* nouveau_notifier.c */
 extern int  nouveau_notifier_init_channel(struct nouveau_channel *);
