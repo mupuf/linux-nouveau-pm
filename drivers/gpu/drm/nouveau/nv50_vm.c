@@ -85,7 +85,7 @@ nv50_vm_map(struct nouveau_vma *vma, struct nouveau_gpuobj *pgt,
 		target = 3;
 	}
 
-	phys  = vm_addr(vma, phys, mem->memtype, 0);
+	phys  = vm_addr(vma, phys, mem->memtype, target);
 	pte <<= 3;
 	cnt <<= 3;
 
