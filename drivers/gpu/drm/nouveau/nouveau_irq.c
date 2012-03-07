@@ -59,6 +59,9 @@ nouveau_irq_postinstall(struct drm_device *dev)
 	if (dev_priv->msi_enabled)
 		nv_wr08(dev, 0x00088068, 0xff);
 
+	if (dev_priv->card_type >= NV_50)
+		nv50_irq_user_init(dev);
+
 	return 0;
 }
 
@@ -121,6 +124,9 @@ void
 nouveau_irq_fini(struct drm_device *dev)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
+
+	if (dev_priv->card_type >= NV_50)
+		nv50_irq_user_fini(dev);
 
 	drm_irq_uninstall(dev);
 	if (dev_priv->msi_enabled)

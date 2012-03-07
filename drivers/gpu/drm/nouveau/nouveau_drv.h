@@ -421,6 +421,14 @@ struct nouveau_gpio_engine {
 	void (*irq_enable)(struct drm_device *, int line, bool);
 };
 
+struct nouveau_user_irq_engine {
+	struct nouveau_user_irq_handler {
+		struct drm_device *dev;
+		struct work_struct work;
+		void (*service_routine)(struct drm_device*, u32*);
+	} handler[2];
+};
+
 struct nouveau_pm_voltage_level {
 	u32 voltage; /* microvolts */
 	u8  vid;
@@ -656,6 +664,7 @@ struct nouveau_engine {
 	struct nouveau_gpio_engine    gpio;
 	struct nouveau_pm_engine      pm;
 	struct nouveau_vram_engine    vram;
+	struct nouveau_user_irq_engine user_irq;
 };
 
 struct nouveau_pll_vals {
@@ -1107,6 +1116,12 @@ extern void        nouveau_irq_unregister(struct drm_device *, int status_bit);
 extern void        nouveau_irq_preinstall(struct drm_device *);
 extern int         nouveau_irq_postinstall(struct drm_device *);
 extern void        nouveau_irq_uninstall(struct drm_device *);
+
+/* nv50_irq.c */
+extern void nv50_irq_user_init(struct drm_device *);
+extern void nv50_irq_user_fini(struct drm_device *);
+extern int nv50_irq_user_reg(struct drm_device *,
+		void (*sr)(struct drm_device *, u32 *));
 
 /* nouveau_sgdma.c */
 extern int nouveau_sgdma_init(struct drm_device *);
