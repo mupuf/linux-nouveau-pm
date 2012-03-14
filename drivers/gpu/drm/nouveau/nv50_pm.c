@@ -356,6 +356,7 @@ struct nv50_pm_state {
 	struct nouveau_pm_level *perflvl;
 	struct hwsq_ucode eclk_hwsq;
 	struct hwsq_ucode mclk_hwsq;
+	bool advanced_mem_reclock;
 	u32 mscript;
 	u32 mmast;
 	u32 mctrl;
@@ -512,6 +513,8 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 	struct nv50_pm_state *info = exec->priv;
 	struct nouveau_pm_level *perflvl = info->perflvl;
 	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+	u32 r53c, r5a0, r5a4, r710, r714, r71c;
+	u8 ver, len, *ramcfg;
 	int i;
 
 	for (i = 0; i < 9; i++) {
@@ -520,13 +523,47 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 		if (val != perflvl->timing.reg[i])
 			hwsq_wr32(hwsq, reg, perflvl->timing.reg[i]);
 	}
+
+	if (info->advanced_mem_reclock) {
+		ramcfg = nouveau_perf_ramcfg(dev, perflvl->memory, &ver, &len);
+		if (ramcfg) {
+			r710 = nv_rd32(dev, 0x100710) & ~0x101;
+			r714 = nv_rd32(dev, 0x100714) & ~0x20;
+			r71c = nv_rd32(dev, 0x10071c) & ~0x100;
+
+			if (ramcfg[3] & 0x1)
+				r71c |= 0x100;
+			if (ramcfg[3] & 0x2)
+				r710 |= 0x100;
+			/* if (ramcfg[3] & 0x4) { } TODO */
+			if (!(ramcfg[3] & 0x8)) {
+				r710 |= 0x1;
+				r714 |= 0x20;
+			}
+
+			hwsq_wr32(hwsq, 0x100714, r714);
+			hwsq_wr32(hwsq, 0x10071c, r71c);
+			hwsq_wr32(hwsq, 0x100710, r710);
+
+			if (!perflvl->memscript && perflvl->memory < 340000) {
+				r5a0 = (ramcfg[7] << 16) | ROM16(ramcfg[5]);
+				r5a4 = ROM16(ramcfg[8]);
+
+				hwsq_wr32(hwsq, 0x1005a0, r5a0);
+				hwsq_wr32(hwsq, 0x1005a4, r5a4);
+			}
+		}
+
+		/* found by changing the vbios */
+		r53c = perflvl->memory >= 340000 ? 0x1000 : 0x0;
+		hwsq_wr32(hwsq, 0x10053c, r53c);
+	}
 }
 
 static int
 calc_mclk(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 	  struct nv50_pm_state *info)
 {
-	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	u32 crtc_mask = nv50_display_active_crtcs(dev);
 	struct nouveau_mem_exec_func exec = {
 		.dev = dev,
@@ -563,12 +600,14 @@ calc_mclk(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 
 	/* build the ucode which will reclock the memory for us */
 	hwsq_init(hwsq);
+	if (info->advanced_mem_reclock && nv_rd32(dev, 0x10053c) == 0)
+		hwsq_wr32(hwsq, 0x10053c, 0x1000);
+
 	if (crtc_mask) {
 		hwsq_op5f(hwsq, crtc_mask, 0x00); /* wait for scanout */
 		hwsq_op5f(hwsq, crtc_mask, 0x01); /* wait for vblank */
 	}
-	if (dev_priv->chipset >= 0x92)
-		hwsq_wr32(hwsq, 0x611200, 0x00003300); /* disable scanout */
+
 	hwsq_setf(hwsq, 0x10, 0); /* disable bus access */
 	hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
 
@@ -578,8 +617,6 @@ calc_mclk(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 
 	hwsq_setf(hwsq, 0x10, 1); /* enable bus access */
 	hwsq_op5f(hwsq, 0x00, 0x00); /* no idea, reverse of 0x00, 0x01? */
-	if (dev_priv->chipset >= 0x92)
-		hwsq_wr32(hwsq, 0x611200, 0x00003330); /* enable scanout */
 	hwsq_fini(hwsq);
 	return 0;
 }
@@ -608,11 +645,13 @@ nv50_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	 *         use pcie refclock if possible, otherwise use mpll */
 	info->mclk_hwsq.len = 0;
 	if (perflvl->memory) {
+		info->mscript = perflvl->memscript;
+		info->advanced_mem_reclock = info->mscript > 0;
 		ret = calc_mclk(dev, perflvl, info);
 		if (ret)
 			goto error;
-		info->mscript = perflvl->memscript;
-	}
+	} else
+		info->advanced_mem_reclock = 0;
 
 	divs = read_div(dev);
 	mast = info->mmast;
@@ -791,9 +830,13 @@ prog_hwsq(struct drm_device *dev, struct hwsq_ucode *hwsq)
 int
 nv50_pm_clocks_set(struct drm_device *dev, void *data)
 {
+	struct drm_nouveau_private *dev_priv = dev->dev_private;
 	struct nv50_pm_state *info = data;
-	struct bit_entry M;
+	struct nouveau_pm_level *perflvl = info->perflvl;
+	u32 r1005a0, r1005a4, r100b0c = 0;
 	int ret = -EBUSY;
+
+	nv_mask(dev, 0x610300, 0x00000001, 0x00000001);
 
 	/* halt and idle execution engines */
 	nv_mask(dev, 0x002504, 0x00000001, 0x00000001);
@@ -806,20 +849,57 @@ nv50_pm_clocks_set(struct drm_device *dev, void *data)
 	 * reprogramming due to how we construct the hwsq scripts in pre()
 	 */
 	if (info->mclk_hwsq.len) {
-		/* execute some scripts that do ??? from the vbios.. */
-		if (!bit_table(dev, 'M', &M) && M.version == 1) {
-			if (M.length >= 6)
-				nouveau_bios_init_exec(dev, ROM16(M.data[5]));
-			if (M.length >= 8)
-				nouveau_bios_init_exec(dev, ROM16(M.data[7]));
-			if (M.length >= 10)
-				nouveau_bios_init_exec(dev, ROM16(M.data[9]));
-			nouveau_bios_init_exec(dev, info->mscript);
+		/* execute the mem script that is associated with the perflvl */
+		if (info->advanced_mem_reclock) {
+			if (perflvl->memory >= 145000)
+				nv_mask(dev, 0x122c, 0x80000000, 0x00000000);
+
+			if (nv_rd32(dev, 0x10053c) == 0) {
+				r1005a0 = nv_rd32(dev, 0x1005a0);
+				r1005a4 = nv_rd32(dev, 0x1005a4);
+
+				nv_wr32(dev, 0x100760,
+					((r1005a0 >> 0x04) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x100780,
+					((r1005a0 >> 0x00) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x1007a0,
+					((r1005a0 >> 0x0c) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x1007c0,
+					((r1005a0 >> 0x08) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x1007e0,
+					((r1005a0 >> 0x14) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x100800,
+					((r1005a0 >> 0x10) & 0xf) * 0x11111111);
+
+				nv_wr32(dev, 0x100820,
+					((r1005a4 >> 0x00) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x100840,
+					((r1005a4 >> 0x04) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x100860,
+					((r1005a4 >> 0x08) & 0xf) * 0x11111111);
+				nv_wr32(dev, 0x100880,
+					((r1005a4 >> 0x0c) & 0xf) * 0x11111111);
+			}
+
+			if (info->mscript)
+				nouveau_bios_init_exec(dev, info->mscript);
 		}
+
+
+		if (dev_priv->chipset >= 0x92)
+			r100b0c = nv_mask(dev, 0x100b0c, 0x00000013, 0x00000001);
+		nv_mask(dev, 0x619f00, 0x8, 0x0);
 
 		ret = prog_hwsq(dev, &info->mclk_hwsq);
 		if (ret)
 			goto resume;
+
+		nv_mask(dev, 0x619f00, 0x8, 0x8);
+		if (dev_priv->chipset >= 0x92)
+			nv_wr32(dev, 0x100b0c, r100b0c);
+
+		if (info->advanced_mem_reclock && perflvl->memory < 145000)
+			nv_mask(dev, 0x122c, 0x80000000, 0x80000000);
 	}
 
 	/* program engine clocks */
@@ -827,6 +907,9 @@ nv50_pm_clocks_set(struct drm_device *dev, void *data)
 
 resume:
 	nv_mask(dev, 0x002504, 0x00000001, 0x00000000);
+
+	nv_mask(dev, 0x610300, 0x00000001, 0x00000000);
+
 	kfree(info);
 	return ret;
 }

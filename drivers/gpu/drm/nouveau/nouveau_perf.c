@@ -342,8 +342,8 @@ nouveau_perf_init(struct drm_device *dev)
 			perflvl->memory = ROM16(perf[12]) * 1000;
 			break;
 		case 0x30:
-			perflvl->memscript = ROM16(perf[2]);
 		case 0x35:
+			perflvl->memscript = ROM16(perf[2]);
 			perflvl->fanspeed = perf[6];
 			perflvl->volt_min = perf[7];
 			perflvl->core = ROM16(perf[8]) * 1000;
