@@ -509,6 +509,8 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 {
 	struct nouveau_device *device = nouveau_dev(exec->dev);
 	struct nv50_pm_state *info = exec->priv;
+	struct nouveau_pm *pm = nouveau_pm(exec->dev);
+	struct nouveau_pm_level *perflvl = info->perflvl;
 	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
 	u32 ctrl = nv_rd32(device, 0x004008);
 
@@ -520,6 +522,11 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 	hwsq_wr32(hwsq, 0x4008, ctrl | 0x00000200); /* bypass MPLL */
 	if (info->mctrl & 0x80000000)
 		hwsq_wr32(hwsq, 0x400c, info->mcoef);
+
+	if (perflvl->memory > pm->cur->memory) {
+		mclk_wait(exec, 64000);
+		mclk_wait(exec, 32000);
+	}
 	hwsq_wr32(hwsq, 0x4008, info->mctrl);
 }
 
