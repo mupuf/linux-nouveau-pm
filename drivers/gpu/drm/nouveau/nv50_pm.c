@@ -781,6 +781,14 @@ prog_hwsq(struct drm_device *dev, struct hwsq_ucode *hwsq)
 		hwsq_data = 0x080000;
 		hwsq_kick = 0x00000001;
 	}
+
+	if ((device->chipset < 0x94 && hwsq->len > 0x100) ||
+	    (device->chipset >= 0x94 && hwsq->len > 0x200)) {
+		NV_ERROR(drm, "The HWSQ script is too long (%u bytes). Abort\n",
+			 hwsq->len);
+		return -EIO;
+	}
+
 	/* upload hwsq ucode */
 	nv_mask(device, 0x001098, 0x00000008, 0x00000000);
 	nv_wr32(device, 0x001304, 0x00000000);
