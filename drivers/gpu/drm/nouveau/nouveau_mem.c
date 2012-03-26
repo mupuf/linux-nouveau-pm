@@ -1084,6 +1084,8 @@ nouveau_mem_exec(struct nouveau_mem_exec_func *exec,
 			exec->precharge(exec);
 	}
 
+	exec->reset_unkn(exec);
+
 	return 0;
 }
 

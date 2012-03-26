@@ -532,6 +532,12 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 }
 
 static void
+mclk_reset_unkn(struct nouveau_mem_exec_func *exec) {
+	/* XXX: stub */
+	return;
+}
+
+static void
 prog_mem(struct drm_device *dev, struct nvc0_pm_state *info)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;
@@ -546,6 +552,7 @@ prog_mem(struct drm_device *dev, struct nvc0_pm_state *info)
 		.mrs = mclk_mrs,
 		.clock_set = mclk_clock_set,
 		.timing_set = mclk_timing_set,
+		.reset_unkn = mclk_reset_unkn,
 		.priv = info
 	};
 

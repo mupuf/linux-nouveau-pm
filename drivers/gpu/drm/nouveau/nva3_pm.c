@@ -250,6 +250,7 @@ struct nva3_pm_state {
 	u8  ramcfg_len;
 	u32 r004018;
 	u32 r100760;
+	u32 r100da0;
 };
 
 void *
@@ -390,6 +391,7 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 		nv_wr32(dev, 0x004000, (ctrl &= ~0x00000001));
 		nv_wr32(dev, 0x004004, info->mclk.pll);
 		nv_wr32(dev, 0x004000, (ctrl |=  0x00000001));
+		nv_wr32(dev, 0x100da0, info->r100da0);
 		udelay(64);
 		nv_wr32(dev, 0x004018, 0x00005000 | info->r004018);
 		udelay(20);
@@ -397,6 +399,7 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 	if (!info->mclk.pll) {
 		nv_mask(dev, 0x004168, 0x003f3040, info->mclk.clk);
 		nv_wr32(dev, 0x004000, (ctrl |= 0x00000008));
+		nv_wr32(dev, 0x100da0, info->r100da0);
 		nv_mask(dev, 0x1110e0, 0x00088000, 0x00088000);
 		nv_wr32(dev, 0x004018, 0x0000d000 | info->r004018);
 	}
@@ -469,6 +472,17 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 }
 
 static void
+mclk_reset_unkn(struct nouveau_mem_exec_func *exec) {
+	struct drm_device *dev = exec->dev;
+
+	/* We just did all MRs, reset "stuff" first */
+	nv_wr32(dev, 0x100264, 0x1);
+	exec->wait(exec, 2000);
+	nv_mask(dev, 0x100700, 0x1000000, 0x1000000);
+	nv_mask(dev, 0x100700, 0x1000000, 0x0000000);
+}
+
+static void
 prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 {
 	struct nouveau_mem_exec_func exec = {
@@ -482,6 +496,7 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 		.mrs = mclk_mrs,
 		.clock_set = mclk_clock_set,
 		.timing_set = mclk_timing_set,
+		.reset_unkn = mclk_reset_unkn,
 		.priv = info
 	};
 	u32 ctrl;
@@ -490,6 +505,18 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 	if (info->perflvl->memory <= 750000) {
 		info->r004018 = 0x10000000;
 		info->r100760 = 0x22222222;
+		info->r100da0 = 0x10;
+	} else {
+		info->r100da0 = 0x0;
+	}
+
+	/* XXX: And 500MHz?
+	 * Besides: these values must depend on sth more, they're initialised
+	 * by the vbios to 20404. More samples required! */
+	if (info->perflvl->memory <= 500000) {
+		nv_wr32(dev, 0x100674, 0x20f0f);
+	} else {
+		nv_wr32(dev, 0x100674, 0x20002);
 	}
 
 	ctrl = nv_rd32(dev, 0x004000);
@@ -501,6 +528,7 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 			nv_wr32(dev, 0x004000, (ctrl &= 0xffffffef));
 			nv_wait(dev, 0x004000, 0x00020000, 0x00020000);
 			nv_wr32(dev, 0x004000, (ctrl |= 0x00000010));
+			nv_wr32(dev, 0x100da0, info->r100da0);
 			nv_wr32(dev, 0x004018, 0x00005000 | info->r004018);
 			nv_wr32(dev, 0x004000, (ctrl |= 0x00000004));
 		}
@@ -558,6 +586,7 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 	struct nva3_pm_state *info = pre_state;
 	unsigned long flags;
 	int ret = -EAGAIN;
+	u32 r02c;
 
 	/* prevent any new grctx switches from starting */
 	spin_lock_irqsave(&dev_priv->context_switch_lock, flags);
@@ -575,7 +604,11 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 		goto cleanup;
 	}
 
+	/* XXX: Exact value is not 100% linear, doesn't seem critical though */
+	r02c = max(((info->perflvl->core + 7566) / 15133), (u32) 18);
+
 	prog_pll(dev, 0x00, 0x004200, &info->nclk);
+	nv_wr32(dev, 0x10002c, r02c);
 	prog_pll(dev, 0x01, 0x004220, &info->sclk);
 	prog_clk(dev, 0x20, &info->unka0);
 	prog_clk(dev, 0x21, &info->vdec);

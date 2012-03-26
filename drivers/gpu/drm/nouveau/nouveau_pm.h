@@ -36,6 +36,7 @@ struct nouveau_mem_exec_func {
 	void (*mrs)(struct nouveau_mem_exec_func *, int mr, u32 data);
 	void (*clock_set)(struct nouveau_mem_exec_func *);
 	void (*timing_set)(struct nouveau_mem_exec_func *);
+	void (*reset_unkn)(struct nouveau_mem_exec_func *);
 	void *priv;
 };
 
