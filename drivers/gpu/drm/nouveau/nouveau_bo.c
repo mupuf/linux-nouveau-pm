@@ -490,7 +490,7 @@ nve0_bo_move_copy(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 	struct nouveau_mem *node = old_mem->mm_node;
 	int ret = RING_SPACE(chan, 10);
 	if (ret == 0) {
-		BEGIN_NVC0(chan, 2, NvSubCopy, 0x0400, 8);
+		BEGIN_NVC0(chan, NvSubCopy, 0x0400, 8);
 		OUT_RING  (chan, upper_32_bits(node->vma[0].offset));
 		OUT_RING  (chan, lower_32_bits(node->vma[0].offset));
 		OUT_RING  (chan, upper_32_bits(node->vma[1].offset));
@@ -499,7 +499,7 @@ nve0_bo_move_copy(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		OUT_RING  (chan, PAGE_SIZE);
 		OUT_RING  (chan, PAGE_SIZE);
 		OUT_RING  (chan, new_mem->num_pages);
-		BEGIN_NVC0(chan, 8, NvSubCopy, 0x0300, 0x0386);
+		BEGIN_IMC0(chan, NvSubCopy, 0x0300, 0x0386);
 	}
 	return ret;
 }
@@ -522,17 +522,17 @@ nvc0_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		if (ret)
 			return ret;
 
-		BEGIN_NVC0(chan, 2, NvSubM2MF, 0x0238, 2);
+		BEGIN_NVC0(chan, NvSubM2MF, 0x0238, 2);
 		OUT_RING  (chan, upper_32_bits(dst_offset));
 		OUT_RING  (chan, lower_32_bits(dst_offset));
-		BEGIN_NVC0(chan, 2, NvSubM2MF, 0x030c, 6);
+		BEGIN_NVC0(chan, NvSubM2MF, 0x030c, 6);
 		OUT_RING  (chan, upper_32_bits(src_offset));
 		OUT_RING  (chan, lower_32_bits(src_offset));
 		OUT_RING  (chan, PAGE_SIZE); /* src_pitch */
 		OUT_RING  (chan, PAGE_SIZE); /* dst_pitch */
 		OUT_RING  (chan, PAGE_SIZE); /* line_length */
 		OUT_RING  (chan, line_count);
-		BEGIN_NVC0(chan, 2, NvSubM2MF, 0x0300, 1);
+		BEGIN_NVC0(chan, NvSubM2MF, 0x0300, 1);
 		OUT_RING  (chan, 0x00100110);
 
 		page_count -= line_count;
@@ -567,7 +567,7 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			if (ret)
 				return ret;
 
-			BEGIN_RING(chan, NvSubM2MF, 0x0200, 7);
+			BEGIN_NV04(chan, NvSubM2MF, 0x0200, 7);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, stride);
@@ -580,7 +580,7 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			if (ret)
 				return ret;
 
-			BEGIN_RING(chan, NvSubM2MF, 0x0200, 1);
+			BEGIN_NV04(chan, NvSubM2MF, 0x0200, 1);
 			OUT_RING  (chan, 1);
 		}
 		if (old_mem->mem_type == TTM_PL_VRAM &&
@@ -589,7 +589,7 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			if (ret)
 				return ret;
 
-			BEGIN_RING(chan, NvSubM2MF, 0x021c, 7);
+			BEGIN_NV04(chan, NvSubM2MF, 0x021c, 7);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, stride);
@@ -602,7 +602,7 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			if (ret)
 				return ret;
 
-			BEGIN_RING(chan, NvSubM2MF, 0x021c, 1);
+			BEGIN_NV04(chan, NvSubM2MF, 0x021c, 1);
 			OUT_RING  (chan, 1);
 		}
 
@@ -610,10 +610,10 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		if (ret)
 			return ret;
 
-		BEGIN_RING(chan, NvSubM2MF, 0x0238, 2);
+		BEGIN_NV04(chan, NvSubM2MF, 0x0238, 2);
 		OUT_RING  (chan, upper_32_bits(src_offset));
 		OUT_RING  (chan, upper_32_bits(dst_offset));
-		BEGIN_RING(chan, NvSubM2MF, 0x030c, 8);
+		BEGIN_NV04(chan, NvSubM2MF, 0x030c, 8);
 		OUT_RING  (chan, lower_32_bits(src_offset));
 		OUT_RING  (chan, lower_32_bits(dst_offset));
 		OUT_RING  (chan, stride);
@@ -622,7 +622,7 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		OUT_RING  (chan, height);
 		OUT_RING  (chan, 0x00000101);
 		OUT_RING  (chan, 0x00000000);
-		BEGIN_RING(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_NOP, 1);
+		BEGIN_NV04(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_NOP, 1);
 		OUT_RING  (chan, 0);
 
 		length -= amount;
@@ -655,7 +655,7 @@ nv04_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 	if (ret)
 		return ret;
 
-	BEGIN_RING(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_DMA_SOURCE, 2);
+	BEGIN_NV04(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_DMA_SOURCE, 2);
 	OUT_RING  (chan, nouveau_bo_mem_ctxdma(bo, chan, old_mem));
 	OUT_RING  (chan, nouveau_bo_mem_ctxdma(bo, chan, new_mem));
 
@@ -667,7 +667,7 @@ nv04_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		if (ret)
 			return ret;
 
-		BEGIN_RING(chan, NvSubM2MF,
+		BEGIN_NV04(chan, NvSubM2MF,
 				 NV_MEMORY_TO_MEMORY_FORMAT_OFFSET_IN, 8);
 		OUT_RING  (chan, src_offset);
 		OUT_RING  (chan, dst_offset);
@@ -677,7 +677,7 @@ nv04_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		OUT_RING  (chan, line_count);
 		OUT_RING  (chan, 0x00000101);
 		OUT_RING  (chan, 0x00000000);
-		BEGIN_RING(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_NOP, 1);
+		BEGIN_NV04(chan, NvSubM2MF, NV_MEMORY_TO_MEMORY_FORMAT_NOP, 1);
 		OUT_RING  (chan, 0);
 
 		page_count -= line_count;
