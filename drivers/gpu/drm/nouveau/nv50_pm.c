@@ -802,7 +802,7 @@ error:
 	return ERR_PTR(ret);
 }
 
-static int
+int
 prog_hwsq(struct drm_device *dev, struct hwsq_ucode *hwsq)
 {
 	struct drm_nouveau_private *dev_priv = dev->dev_private;

@@ -69,6 +69,13 @@ hwsq_usec(struct hwsq_ucode *hwsq, u8 usec)
 }
 
 static inline void
+hwsq_wait(struct hwsq_ucode *hwsq, u32 reg, u32 mask, u32 value)
+{
+	/* XXX: Unimplemented in _real_ hwsq */
+	hwsq_usec(hwsq, 4);
+}
+
+static inline void
 hwsq_setf(struct hwsq_ucode *hwsq, u8 flag, int val)
 {
 	flag += 0x80;
@@ -111,5 +118,8 @@ hwsq_wr32(struct hwsq_ucode *hwsq, u32 reg, u32 val)
 	}
 	hwsq->reg = reg;
 }
+
+/* nv50_pm.c */
+extern int prog_hwsq(struct drm_device *, struct hwsq_ucode *);
 
 #endif

@@ -24,6 +24,7 @@
 
 #include "drmP.h"
 #include "nouveau_drv.h"
+#include "nouveau_hwsq.h"
 #include "nouveau_bios.h"
 #include "nouveau_pm.h"
 
@@ -211,6 +212,46 @@ prog_pll(struct drm_device *dev, int clk, u32 pll, struct creg *reg)
 }
 
 static void
+hwsq_prog_pll(struct drm_device *dev, struct hwsq_ucode *hwsq,
+		int clk, u32 pll, struct creg *reg)
+{
+	const u32 src0 = 0x004120 + (clk * 4);
+	const u32 src1 = 0x004160 + (clk * 4);
+	const u32 ctrl = pll + 0;
+	const u32 coef = pll + 4;
+
+	u32 src0_v, src1_v, ctrl_v;
+	src0_v = nv_rd32(dev, src0);
+	src1_v = nv_rd32(dev, src1);
+	ctrl_v = nv_rd32(dev, ctrl);
+
+	if (!reg->clk && !reg->pll) {
+		NV_DEBUG(dev, "no clock for %02x\n", clk);
+		return;
+	}
+
+	if (reg->pll) {
+		hwsq_wr32(hwsq, src0, src0_v |= 0x00000101);
+		hwsq_wr32(hwsq, coef, reg->pll);
+		hwsq_wr32(hwsq, ctrl, ctrl_v |= 0x00000015);
+		hwsq_wr32(hwsq, ctrl, ctrl_v &= ~0x00000010);
+		hwsq_wait(hwsq, ctrl, 0x00020000, 0x00020000);
+		hwsq_wr32(hwsq, ctrl, ctrl_v |= 0x00000010);
+		hwsq_wr32(hwsq, ctrl, ctrl_v &= ~0x00000008);
+		hwsq_wr32(hwsq, src1, src1_v &= ~0x00000100);
+		hwsq_wr32(hwsq, src1, src1_v &= ~0x00000001);
+	} else {
+		src1_v = (src1_v & ~0x003f3141) | 0x101 | reg->clk;
+		hwsq_wr32(hwsq, src1, src1_v);
+		hwsq_wr32(hwsq, ctrl, ctrl_v |= 0x00000018);
+		hwsq_usec(hwsq, 20);
+		hwsq_wr32(hwsq, ctrl, ctrl_v &= ~0x00000001);
+		hwsq_wr32(hwsq, src0, src0_v &= ~0x00000100);
+		hwsq_wr32(hwsq, src0, src0_v &= ~0x00000001);
+	}
+}
+
+static void
 prog_clk(struct drm_device *dev, int clk, struct creg *reg)
 {
 	if (!reg->clk) {
@@ -219,6 +260,23 @@ prog_clk(struct drm_device *dev, int clk, struct creg *reg)
 	}
 
 	nv_mask(dev, 0x004120 + (clk * 4), 0x003f3141, 0x00000101 | reg->clk);
+}
+
+static void
+hwsq_prog_clk(struct drm_device *dev, struct hwsq_ucode *hwsq,
+		int clk, struct creg *reg)
+{
+	u32 clkVal;
+
+	if (!reg->clk) {
+		NV_DEBUG(dev, "no clock for %02x\n", clk);
+		return;
+	}
+
+	clkVal = nv_rd32(dev, 0x4120 + (clk * 4));
+	clkVal &= ~0x3f3141;
+	clkVal |= 0x00000101 | reg->clk;
+	hwsq_wr32(hwsq, 0x4120 + (clk * 4), clkVal);
 }
 
 int
@@ -251,6 +309,8 @@ struct nva3_pm_state {
 	u32 r004018;
 	u32 r100760;
 	u32 r100da0;
+
+	struct hwsq_ucode eclk_hwsq;
 };
 
 void *
@@ -259,6 +319,8 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	struct nva3_pm_state *info;
 	u8 ramcfg_cnt;
 	int ret;
+	u32 r02c;
+	struct hwsq_ucode *hwsq;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -283,6 +345,25 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	ret = calc_clk(dev, 0x21, 0x0000, perflvl->vdec, &info->vdec);
 	if (ret < 0)
 		goto out;
+
+	/* XXX: Exact value is not 100% linear, doesn't seem critical though */
+	r02c = max(((perflvl->core + 7566) / 15133), (u32) 18);
+
+	hwsq = &info->eclk_hwsq;
+	/* Build HWSQ script for engine clocks */
+	hwsq_init(hwsq);
+	hwsq_setf(hwsq, 0x10, 0); /* disable bus access */
+	hwsq_op5f(hwsq, 0x00, 0x01); /* wait for access disabled? */
+
+	hwsq_prog_pll(dev, hwsq, 0x00, 0x004200, &info->nclk);
+	hwsq_wr32(hwsq, 0x10002c, r02c);
+	hwsq_prog_pll(dev, hwsq, 0x01, 0x004220, &info->sclk);
+	hwsq_prog_clk(dev, hwsq, 0x20, &info->unka0);
+	hwsq_prog_clk(dev, hwsq, 0x21, &info->vdec);
+
+	hwsq_setf(hwsq, 0x10, 1); /* Enable bus access */
+	hwsq_op5f(hwsq, 0x00, 0x00); /* wait for access enabled? */
+	hwsq_fini(hwsq);
 
 	info->rammap = nouveau_perf_rammap(dev, perflvl->memory,
 					   &info->rammap_ver,
@@ -586,7 +667,6 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 	struct nva3_pm_state *info = pre_state;
 	unsigned long flags;
 	int ret = -EAGAIN;
-	u32 r02c;
 
 	/* prevent any new grctx switches from starting */
 	spin_lock_irqsave(&dev_priv->context_switch_lock, flags);
@@ -603,15 +683,12 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 		NV_ERROR(dev, "pm: fifo didn't go idle\n");
 		goto cleanup;
 	}
+	if (!nv_wait(dev, 0x00251c, 0x0000003f, 0x0000003f)) {
+		NV_ERROR(dev, "pm: engine didn't go idle\n");
+		goto cleanup;
+	}
 
-	/* XXX: Exact value is not 100% linear, doesn't seem critical though */
-	r02c = max(((info->perflvl->core + 7566) / 15133), (u32) 18);
-
-	prog_pll(dev, 0x00, 0x004200, &info->nclk);
-	nv_wr32(dev, 0x10002c, r02c);
-	prog_pll(dev, 0x01, 0x004220, &info->sclk);
-	prog_clk(dev, 0x20, &info->unka0);
-	prog_clk(dev, 0x21, &info->vdec);
+	prog_hwsq(dev, &info->eclk_hwsq);
 
 	if (info->mclk.clk || info->mclk.pll)
 		prog_mem(dev, info);
