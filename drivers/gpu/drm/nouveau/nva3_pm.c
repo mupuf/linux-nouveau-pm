@@ -690,7 +690,8 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 
 	prog_hwsq(dev, &info->eclk_hwsq);
 
-	if (info->mclk.clk || info->mclk.pll)
+	if (dev_priv->engine.pm.reclock_mem &&
+		(info->mclk.clk || info->mclk.pll))
 		prog_mem(dev, info);
 
 	ret = 0;

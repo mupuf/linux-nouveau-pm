@@ -1115,10 +1115,15 @@ nouveau_pm_init(struct drm_device *dev)
 	NV_INFO(dev, "c:%s", info);
 
 	/* Enable pm if allowed. The lock is now no longer ours */
-	if (nouveau_perflvl_wr != 7777)
-		nouveau_pm_state_disable(dev);
-	else
+	if (nouveau_perflvl_wr == 7777) {
 		nouveau_pm_state_enable(dev);
+		pm->reclock_mem = TRUE;
+	} else if(nouveau_perflvl_wr == 5555) {
+		nouveau_pm_state_enable(dev);
+		pm->reclock_mem = FALSE;
+	} else {
+		nouveau_pm_state_disable(dev);
+	}
 
 	/* switch performance levels now if requested */
 	if (nouveau_perflvl != NULL)

@@ -618,6 +618,7 @@ struct nouveau_pm_engine {
 	struct semaphore reclock_lock;
 	struct nouveau_pm_counter counter;
 	enum nouveau_pm_engine_state reclock_state;
+	bool reclock_mem;
 
 	struct nouveau_pm_profile *profile_ac;
 	struct nouveau_pm_profile *profile_dc;
