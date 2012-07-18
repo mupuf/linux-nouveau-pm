@@ -771,10 +771,11 @@ nouveau_mem_gddr3_mr(struct drm_device *dev, u32 freq,
 	t->mr[0] = (boot->mr[0] & 0xe0b) |
 		   /* CAS */
 		   ((nv_mem_cl_lut_gddr3[e->tCL] & 0x7) << 4) |
-		   ((nv_mem_cl_lut_gddr3[e->tCL] & 0x8) >> 2);
+		   ((nv_mem_cl_lut_gddr3[e->tCL] & 0x8) >> 1);
 	t->mr[1] = (boot->mr[1] & 0x100f40) | t->drive_strength |
 		   (t->odt << 2) |
-		   (nv_mem_wr_lut_gddr3[e->tWR] & 0xf) << 4;
+		   (t->ron_pull << 9) |
+		   ((nv_mem_wr_lut_gddr3[e->tWR] & 0xf) << 4);
 	t->mr[2] = boot->mr[2];
 
 	NV_DEBUG(dev, "(%u) MR: %08x %08x %08x", t->id,
@@ -840,6 +841,7 @@ nouveau_mem_timing_calc(struct drm_device *dev, u32 freq,
 	struct nouveau_pm_tbl_entry *e;
 	u8 ver, len, *ptr, *ramcfg;
 	int ret;
+	int dll_off = 0;
 
 	ptr = nouveau_perf_timing(dev, freq, &ver, &len);
 	if (!ptr || ptr[0] == 0x00) {
@@ -849,6 +851,7 @@ nouveau_mem_timing_calc(struct drm_device *dev, u32 freq,
 	e = (struct nouveau_pm_tbl_entry *)ptr;
 
 	t->tCWL = boot->tCWL;
+	t->ron_pull = 1;
 
 	switch (dev_priv->card_type) {
 	case NV_40:
@@ -864,6 +867,16 @@ nouveau_mem_timing_calc(struct drm_device *dev, u32 freq,
 	default:
 		ret = -ENODEV;
 		break;
+	}
+
+	ramcfg = nouveau_perf_ramcfg(dev, freq, &ver, &len);
+	if (ramcfg) {
+		if (ver == 0x00) {
+			dll_off = !!(ramcfg[3] & 0x04);
+			t->ron_pull = ((ramcfg[3] & 0x10) >> 4);
+		} else {
+			dll_off = !!(ramcfg[2] & 0x40);
+		}
 	}
 
 	switch (dev_priv->vram_type * !ret) {
@@ -884,25 +897,15 @@ nouveau_mem_timing_calc(struct drm_device *dev, u32 freq,
 		break;
 	}
 
-	ramcfg = nouveau_perf_ramcfg(dev, freq, &ver, &len);
-	if (ramcfg) {
-		int dll_off;
-
-		if (ver == 0x00)
-			dll_off = !!(ramcfg[3] & 0x04);
-		else
-			dll_off = !!(ramcfg[2] & 0x40);
-
-		switch (dev_priv->vram_type) {
-		case NV_MEM_TYPE_GDDR3:
-			t->mr[1] &= ~0x00000040;
-			t->mr[1] |=  0x00000040 * dll_off;
-			break;
-		default:
-			t->mr[1] &= ~0x00000001;
-			t->mr[1] |=  0x00000001 * dll_off;
-			break;
-		}
+	switch (dev_priv->vram_type) {
+	case NV_MEM_TYPE_GDDR3:
+		t->mr[1] &= ~0x00000040;
+		t->mr[1] |=  0x00000040 * dll_off;
+		break;
+	default:
+		t->mr[1] &= ~0x00000001;
+		t->mr[1] |=  0x00000001 * dll_off;
+		break;
 	}
 
 	return ret;
