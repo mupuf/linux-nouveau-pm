@@ -153,6 +153,7 @@ int drm_err(const char *func, const char *format, ...);
 #define DRIVER_GEM         0x1000
 #define DRIVER_MODESET     0x2000
 #define DRIVER_PRIME       0x4000
+#define DRIVER_RENDER      0x8000
 
 #define DRIVER_BUS_PCI 0x1
 #define DRIVER_BUS_PLATFORM 0x2
@@ -307,6 +308,7 @@ typedef int drm_ioctl_compat_t(struct file *filp, unsigned int cmd,
 #define DRM_ROOT_ONLY	0x4
 #define DRM_CONTROL_ALLOW 0x8
 #define DRM_UNLOCKED	0x10
+#define DRM_RENDER_ALLOW 0x20
 
 struct drm_ioctl_desc {
 	unsigned int cmd;
@@ -1186,6 +1188,7 @@ struct drm_device {
 	struct drm_local_map *agp_buffer_map;
 	unsigned int agp_buffer_token;
 	struct drm_minor *control;		/**< Control node for card */
+	struct drm_minor *render;		/**< Render node for card */
 	struct drm_minor *primary;		/**< render type primary screen head */
 
         struct drm_mode_config mode_config;	/**< Current mode config */
