@@ -149,7 +149,7 @@ nouveau_accel_init(struct nouveau_drm *drm)
 			NV_ERROR(drm, "failed to create ce channel, %d\n", ret);
 
 		arg0 = NVE0_CHANNEL_IND_ENGINE_GR;
-		arg1 = 0;
+		arg1 = 1;
 	} else {
 		arg0 = NvDmaFB;
 		arg1 = NvDmaTT;
