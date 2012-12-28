@@ -608,16 +608,13 @@ nv50_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 {
 	struct nouveau_device *device = nouveau_dev(dev);
 	struct nouveau_drm *drm = nouveau_drm(dev);
+	struct nouveau_fb *pfb = nouveau_fb(device);
 	struct nv50_pm_state *info;
 	struct hwsq_ucode *hwsq;
 	struct nvbios_pll pll;
 	u32 out, mast, divs, ctrl;
 	int clk, ret = -EINVAL;
 	int N, M, P1, P2;
-
-	if (nv_device(drm->device)->chipset == 0xaa ||
-	    nv_device(drm->device)->chipset == 0xac)
-		return ERR_PTR(-ENODEV);
 
 	info = kmalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -627,7 +624,7 @@ nv50_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	/* memory: build hwsq ucode which we'll use to reclock memory.
 	 *         use pcie refclock if possible, otherwise use mpll */
 	info->mclk_hwsq.len = 0;
-	if (perflvl->memory) {
+	if (perflvl->memory && pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN) {
 		ret = calc_mclk(dev, perflvl, info);
 		if (ret)
 			goto error;

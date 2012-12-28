@@ -274,6 +274,8 @@ void *
 nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 {
 	struct nva3_pm_state *info;
+	struct nouveau_device *device = nouveau_dev(dev);
+	struct nouveau_fb *pfb = nouveau_fb(device);
 	u8 ramcfg_cnt;
 	int ret;
 
@@ -289,9 +291,11 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	if (ret < 0)
 		goto out;
 
-	ret = calc_clk(dev, 0x12, 0x4000, perflvl->memory, &info->mclk);
-	if (ret < 0)
-		goto out;
+	if(pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN) {
+		ret = calc_clk(dev, 0x12, 0x4000, perflvl->memory, &info->mclk);
+		if (ret < 0)
+			goto out;
+	}
 
 	ret = calc_clk(dev, 0x20, 0x0000, perflvl->unka0, &info->unka0);
 	if (ret < 0)

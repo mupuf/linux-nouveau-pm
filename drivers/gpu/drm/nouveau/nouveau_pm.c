@@ -37,6 +37,7 @@
 #include <subdev/gpio.h>
 #include <subdev/timer.h>
 #include <subdev/therm.h>
+#include <subdev/fb.h>
 
 MODULE_PARM_DESC(perflvl, "Performance level (default: boot)");
 static char *nouveau_perflvl;
@@ -228,6 +229,7 @@ nouveau_pm_perflvl_get(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	struct nouveau_drm *drm = nouveau_drm(dev);
 	struct nouveau_pm *pm = nouveau_pm(dev);
 	struct nouveau_therm *therm = nouveau_therm(drm->device);
+	struct nouveau_fb *pfb = nouveau_fb(drm->device);
 	int ret;
 
 	memset(perflvl, 0, sizeof(*perflvl));
@@ -252,7 +254,9 @@ nouveau_pm_perflvl_get(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 			perflvl->fanspeed = ret;
 	}
 
-	nouveau_mem_timing_read(dev, &perflvl->timing);
+	if (pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN)
+		nouveau_mem_timing_read(dev, &perflvl->timing);
+
 	return 0;
 }
 
