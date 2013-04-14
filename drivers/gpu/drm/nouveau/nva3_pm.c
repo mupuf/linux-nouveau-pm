@@ -586,7 +586,9 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 {
 	struct nouveau_device *device = nouveau_dev(dev);
 	struct nouveau_drm *drm = nouveau_drm(dev);
+	struct nouveau_fb *pfb = nouveau_fb(device);
 	struct nva3_pm_state *info = pre_state;
+	u32 pfb_2c;
 	int ret = -EAGAIN;
 
 	/* prevent any new grctx switches from starting */
@@ -604,7 +606,13 @@ nva3_pm_clocks_set(struct drm_device *dev, void *pre_state)
 		goto cleanup;
 	}
 
+	/* XXX: Exact value is not 100% linear, doesn't seem critical though
+	 * Purpose unknown */
+	pfb_2c = max(((info->perflvl->core + 7566) / 15133), (u32) 18);
+
 	prog_pll(dev, 0x00, 0x004200, &info->nclk);
+	if(pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN)
+		nv_wr32(device, 0x10002c, pfb_2c);
 	prog_pll(dev, 0x01, 0x004220, &info->sclk);
 	prog_clk(dev, 0x20, &info->unka0);
 	prog_clk(dev, 0x21, &info->vdec);
