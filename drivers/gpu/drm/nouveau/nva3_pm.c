@@ -270,6 +270,7 @@ struct nva3_pm_state {
 	u8  ramcfg_len;
 	u32 r004018;
 	u32 r100760;
+	u32 r100da0;
 };
 
 static bool
@@ -384,9 +385,8 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000001));
 		hwsq_wr32(hwsq, 0x004004, info->mclk.pll);
 		hwsq_wr32(hwsq, 0x004000, (ctrl |=  0x00000001));
-		mclk_wait(exec, 64000);
+		hwsq_wr32(hwsq, 0x100da0, info->r100da0);
 		hwsq_wr32(hwsq, 0x004018, 0x00005000 | info->r004018);
-		mclk_wait(exec, 20000);
 	} else
 	if (!info->mclk.pll) {
 		mclk = nv_rd32(device, 0x4168);
@@ -397,8 +397,12 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 		hwsq_wr32(hwsq, 0x004168, mclk);
 		hwsq_wr32(hwsq, 0x004000, (ctrl |= 0x00000008));
 		hwsq_wr32(hwsq, 0x1110e0, u1110e0 | 0x00088000);
+		hwsq_wr32(hwsq, 0x100da0, info->r100da0);
 		hwsq_wr32(hwsq, 0x004018, 0x0000d000 | info->r004018);
 	}
+
+
+	exec->wait(exec, 20000);
 
 	if (info->rammap) {
 		if (info->ramcfg && (info->rammap[4] & 0x08)) {
@@ -642,6 +646,7 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 	if (info->perflvl->memory <= 750000) {
 		info->r004018 = 0x10000000;
 		info->r100760 = 0x22222222;
+		info->r100da0 = 0x10;
 	}
 
 	ctrl = nv_rd32(device, 0x004000);
