@@ -250,6 +250,11 @@ int nv50_pm_clocks_set(struct drm_device *, void *);
 int nv50_pm_pwm_get(struct drm_device *, int, u32 *, u32 *);
 int nv50_pm_pwm_set(struct drm_device *, int, u32, u32);
 
+/* nvaa_pm.c */
+int nvaa_pm_clocks_get(struct drm_device *, struct nouveau_pm_level *);
+void *nvaa_pm_clocks_pre(struct drm_device *, struct nouveau_pm_level *);
+int nvaa_pm_clocks_set(struct drm_device *, void *);
+
 /* nva3_pm.c */
 int nva3_pm_clocks_get(struct drm_device *, struct nouveau_pm_level *);
 void *nva3_pm_clocks_pre(struct drm_device *, struct nouveau_pm_level *);

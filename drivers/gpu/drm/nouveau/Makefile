@@ -262,7 +262,7 @@ nouveau-y += nv50_display.o
 
 # drm/pm
 nouveau-y += nouveau_pm.o nouveau_volt.o nouveau_perf.o
-nouveau-y += nv04_pm.o nv40_pm.o nv50_pm.o nva3_pm.o nvc0_pm.o
+nouveau-y += nv04_pm.o nv40_pm.o nv50_pm.o nvaa_pm.o nva3_pm.o nvc0_pm.o
 nouveau-y += nouveau_mem.o
 
 # other random bits

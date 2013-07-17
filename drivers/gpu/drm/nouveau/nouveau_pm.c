@@ -1063,12 +1063,15 @@ nouveau_pm_init(struct drm_device *dev)
 		pm->voltage_set = nouveau_voltage_gpio_set;
 	} else
 	if (device->card_type < NV_C0) {
-		if (device->chipset <  0xa3 ||
-		    device->chipset == 0xaa ||
-		    device->chipset == 0xac) {
+		if (device->chipset <  0xa3) {
 			pm->clocks_get = nv50_pm_clocks_get;
 			pm->clocks_pre = nv50_pm_clocks_pre;
 			pm->clocks_set = nv50_pm_clocks_set;
+		} else if(device->chipset == 0xaa ||
+			device->chipset == 0xac) {
+			pm->clocks_get = nvaa_pm_clocks_get;
+			pm->clocks_pre = nvaa_pm_clocks_pre;
+			pm->clocks_set = nvaa_pm_clocks_set;
 		} else {
 			pm->clocks_get = nva3_pm_clocks_get;
 			pm->clocks_pre = nva3_pm_clocks_pre;
