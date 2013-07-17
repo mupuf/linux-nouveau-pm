@@ -498,6 +498,17 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 }
 
 static void
+mclk_timing_post(struct nouveau_mem_exec_func *exec) {
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+
+	/* We just did all MRs and timings, launch or reset "stuff" first */
+	nv_wr32(device, 0x100264, 0x1);
+	exec->wait(exec, 2000);
+	nv_mask(device, 0x100700, 0x1000000, 0x1000000);
+	nv_mask(device, 0x100700, 0x1000000, 0x0000000);
+}
+
+static void
 prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 {
 	struct nouveau_device *device = nouveau_dev(dev);
@@ -512,6 +523,7 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 		.mrs = mclk_mrs,
 		.clock_set = mclk_clock_set,
 		.timing_set = mclk_timing_set,
+		.timing_post = mclk_timing_post,
 		.priv = info
 	};
 	u32 ctrl;

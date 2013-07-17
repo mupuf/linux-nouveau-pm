@@ -550,6 +550,12 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 }
 
 static void
+mclk_timing_post(struct nouveau_mem_exec_func *exec) {
+	/* Do nothing */
+	return;
+}
+
+static void
 prog_mem(struct drm_device *dev, struct nvc0_pm_state *info)
 {
 	struct nouveau_device *device = nouveau_dev(dev);
@@ -564,6 +570,7 @@ prog_mem(struct drm_device *dev, struct nvc0_pm_state *info)
 		.mrs = mclk_mrs,
 		.clock_set = mclk_clock_set,
 		.timing_set = mclk_timing_set,
+		.timing_post = mclk_timing_post,
 		.priv = info
 	};
 

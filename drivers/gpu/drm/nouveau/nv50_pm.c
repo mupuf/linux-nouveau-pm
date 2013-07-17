@@ -547,6 +547,12 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 	}
 }
 
+static void
+mclk_timing_post(struct nouveau_mem_exec_func *exec) {
+	/* Do nothing */
+	return;
+}
+
 static int
 calc_mclk(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 	  struct nv50_pm_state *info)
@@ -565,6 +571,7 @@ calc_mclk(struct drm_device *dev, struct nouveau_pm_level *perflvl,
 		.mrs = mclk_mrs,
 		.clock_set = mclk_clock_set,
 		.timing_set = mclk_timing_set,
+		.timing_post = mclk_timing_post,
 		.priv = info
 	};
 	struct hwsq_ucode *hwsq = &info->mclk_hwsq;

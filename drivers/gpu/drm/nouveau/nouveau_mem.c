@@ -650,6 +650,7 @@ nouveau_mem_exec(struct nouveau_mem_exec_func *exec,
 		if (pfb->ram->type == NV_MEM_TYPE_GDDR3)
 			exec->precharge(exec);
 	}
+	exec->timing_post(exec);
 
 	return 0;
 }
