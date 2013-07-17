@@ -62,6 +62,7 @@ struct nouveau_pm_memtiming {
 
 	u8 odt;
 	u8 drive_strength;
+	u8 ron_pull;
 };
 
 struct nouveau_pm_tbl_header {
