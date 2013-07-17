@@ -26,6 +26,7 @@
 #include "nouveau_drm.h"
 #include "nouveau_bios.h"
 #include "nouveau_pm.h"
+#include "nouveau_hwsq.h"
 
 #include <subdev/bios/pll.h>
 #include <subdev/bios.h>
@@ -261,6 +262,7 @@ struct nva3_pm_state {
 	struct creg unka0;
 
 	struct creg mclk;
+	struct hwsq_ucode mclk_hwsq;
 	u8 *rammap;
 	u8  rammap_ver;
 	u8  rammap_len;
@@ -270,6 +272,271 @@ struct nva3_pm_state {
 	u32 r100760;
 };
 
+static bool
+nva3_pm_grcp_idle(void *data)
+{
+	struct drm_device *dev = data;
+	struct nouveau_device *device = nouveau_dev(dev);
+
+	if (!(nv_rd32(device, 0x400304) & 0x00000001))
+		return true;
+	if (nv_rd32(device, 0x400308) == 0x0050001c)
+		return true;
+	return false;
+}
+
+static void
+mclk_precharge(struct nouveau_mem_exec_func *exec)
+{
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	hwsq_wr32(hwsq, 0x1002d4, 0x00000001);
+}
+
+static void
+mclk_refresh(struct nouveau_mem_exec_func *exec)
+{
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	hwsq_wr32(hwsq, 0x1002d0, 0x00000001);
+}
+
+static void
+mclk_refresh_auto(struct nouveau_mem_exec_func *exec, bool enable)
+{
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	hwsq_wr32(hwsq, 0x100210, enable ? 0x80000000 : 0x00000000);
+}
+
+static void
+mclk_refresh_self(struct nouveau_mem_exec_func *exec, bool enable)
+{
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	hwsq_wr32(hwsq, 0x1002dc, enable ? 0x00000001 : 0x00000000);
+}
+
+static void
+mclk_wait(struct nouveau_mem_exec_func *exec, u32 nsec)
+{
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	if (nsec > 1000)
+		hwsq_usec(hwsq, (nsec + 500) / 1000);
+}
+
+static u32
+mclk_mrg(struct nouveau_mem_exec_func *exec, int mr)
+{
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+	if (mr <= 1)
+		return nv_rd32(device, 0x1002c0 + ((mr - 0) * 4));
+	if (mr <= 3)
+		return nv_rd32(device, 0x1002e0 + ((mr - 2) * 4));
+	return 0;
+}
+
+static void
+mclk_mrs(struct nouveau_mem_exec_func *exec, int mr, u32 data)
+{
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+	struct nouveau_fb *pfb = nouveau_fb(device);
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+
+	if (mr <= 1) {
+		if (pfb->ram->ranks > 1)
+			hwsq_wr32(hwsq, 0x1002c8 + ((mr - 0) * 4), data);
+		hwsq_wr32(hwsq, 0x1002c0 + ((mr - 0) * 4), data);
+	} else
+	if (mr <= 3) {
+		if (pfb->ram->ranks > 1)
+			hwsq_wr32(hwsq, 0x1002e8 + ((mr - 2) * 4), data);
+		hwsq_wr32(hwsq, 0x1002e0 + ((mr - 2) * 4), data);
+	}
+}
+
+static void
+mclk_clock_set(struct nouveau_mem_exec_func *exec)
+{
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+	u32 u1110e0, unk53c, unk804, mclk;
+	u32 ctrl;
+
+	u1110e0 = nv_rd32(device, 0x1110e0);
+	unk53c = nv_rd32(device, 0x10053c);
+
+	ctrl = nv_rd32(device, 0x004000);
+	if (!(ctrl & 0x00000008) && info->mclk.pll) {
+		/* nva3_pm_clocks_set will alter ctrl */
+		ctrl |= 0x5;
+		hwsq_wr32(hwsq, 0x004000, (ctrl |=  0x00000008));
+		hwsq_wr32(hwsq, 0x1110e0, u1110e0 | 0x00088000);
+		hwsq_wr32(hwsq, 0x004018, 0x00001000);
+		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000001));
+		hwsq_wr32(hwsq, 0x004004, info->mclk.pll);
+		hwsq_wr32(hwsq, 0x004000, (ctrl |=  0x00000001));
+		mclk_wait(exec, 64000);
+		hwsq_wr32(hwsq, 0x004018, 0x00005000 | info->r004018);
+		mclk_wait(exec, 20000);
+	} else
+	if (!info->mclk.pll) {
+		mclk = nv_rd32(device, 0x4168);
+		mclk &= ~0x003f3040;
+		mclk |= info->mclk.clk ? info->mclk.clk : 0x00080000;
+		mclk |= 0x00000101;
+
+		hwsq_wr32(hwsq, 0x004168, mclk);
+		hwsq_wr32(hwsq, 0x004000, (ctrl |= 0x00000008));
+		hwsq_wr32(hwsq, 0x1110e0, u1110e0 | 0x00088000);
+		hwsq_wr32(hwsq, 0x004018, 0x0000d000 | info->r004018);
+	}
+
+	if (info->rammap) {
+		if (info->ramcfg && (info->rammap[4] & 0x08)) {
+			u32 unk5a0 = (ROM16(info->ramcfg[5]) << 8) |
+				      info->ramcfg[5];
+			u32 unk5a4 = ROM16(info->ramcfg[7]);
+			u32 unk804 = (info->ramcfg[9] & 0xf0) << 16 |
+				     (info->ramcfg[3] & 0x0f) << 16 |
+				     (info->ramcfg[9] & 0x0f) |
+				     0x80000000;
+			hwsq_wr32(hwsq, 0x1005a0, unk5a0);
+			hwsq_wr32(hwsq, 0x1005a4, unk5a4);
+			hwsq_wr32(hwsq, 0x10f804, unk804);
+			hwsq_wr32(hwsq, 0x10053c, unk53c & ~0x00001000);
+		} else {
+			u32 unk760 = nv_rd32(device, 0x100760) & ~0x22222222;
+			u32 unk7a0 = nv_rd32(device, 0x1007a0) & ~0x22222222;
+			u32 unk7e0 = nv_rd32(device, 0x1007e0) & ~0x22222222;
+			unk804 = nv_rd32(device, 0x10f804);
+			hwsq_wr32(hwsq, 0x10053c, unk53c | 0x00001000);
+			hwsq_wr32(hwsq, 0x10f804, unk804 & ~0x80000000);
+			hwsq_wr32(hwsq, 0x100760, unk760 | info->r100760);
+			hwsq_wr32(hwsq, 0x1007a0, unk7a0 | info->r100760);
+			hwsq_wr32(hwsq, 0x1007e0, unk7e0 | info->r100760);
+		}
+	}
+
+	if (info->mclk.pll) {
+		ctrl |= 5;
+		hwsq_wr32(hwsq, 0x1110e0, 0x1110e0 & ~0x00088000);
+		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000008));
+	}
+}
+
+static void
+mclk_timing_set(struct nouveau_mem_exec_func *exec)
+{
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+	struct nva3_pm_state *info = exec->priv;
+	struct nouveau_pm_level *perflvl = info->perflvl;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+	int i;
+	u32 unk200;
+
+	unk200 = nv_rd32(device, 0x100200) & ~0x00001000;
+
+	for (i = 0; i < 9; i++)
+		hwsq_wr32(hwsq, 0x100220 + (i * 4), perflvl->timing.reg[i]);
+
+	if (info->ramcfg) {
+		u32 data = (info->ramcfg[2] & 0x08) ? 0x00000000 : 0x00001000;
+		hwsq_wr32(hwsq, 0x100200, unk200 | data);
+	}
+
+	if (info->ramcfg) {
+		u32 unk714 = nv_rd32(device, 0x100714) & ~0xf0000010;
+		u32 unk718 = nv_rd32(device, 0x100718) & ~0x00000100;
+		u32 unk71c = nv_rd32(device, 0x10071c) & ~0x00000100;
+		if ( (info->ramcfg[2] & 0x20))
+			unk714 |= 0xf0000000;
+		if (!(info->ramcfg[2] & 0x04))
+			unk714 |= 0x00000010;
+		hwsq_wr32(hwsq, 0x100714, unk714);
+
+		if (info->ramcfg[2] & 0x01)
+			unk71c |= 0x00000100;
+		hwsq_wr32(hwsq, 0x10071c, unk71c);
+
+		if (info->ramcfg[2] & 0x02)
+			unk718 |= 0x00000100;
+		hwsq_wr32(hwsq, 0x100718, unk718);
+
+		if (info->ramcfg[2] & 0x10)
+			hwsq_wr32(hwsq, 0x111100, 0x48000000); /*XXX*/
+	}
+}
+
+static void
+mclk_timing_post(struct nouveau_mem_exec_func *exec) {
+	struct nouveau_device *device = nouveau_dev(exec->dev);
+	struct nva3_pm_state *info = exec->priv;
+	struct hwsq_ucode *hwsq = &info->mclk_hwsq;
+	u32 unk700 = nv_rd32(device, 0x100700) & ~0x1000000;
+
+	/* We just did all MRs and timings, launch or reset "stuff" first */
+	hwsq_wr32(hwsq, 0x100264, 0x1);
+	exec->wait(exec, 2000);
+
+	hwsq_wr32(hwsq, 0x100700, unk700 & 0x1000000);
+	hwsq_wr32(hwsq, 0x100700, unk700);
+}
+
+static int
+prog_hwsq(struct drm_device *dev, struct hwsq_ucode *hwsq)
+{
+	struct nouveau_device *device = nouveau_dev(dev);
+	struct nouveau_drm *drm = nouveau_drm(dev);
+	u32 hwsq_data, hwsq_kick;
+	int i;
+
+	if (nv_device(drm->device)->chipset < 0x94) {
+		hwsq_data = 0x001400;
+		hwsq_kick = 0x00000003;
+	} else {
+		hwsq_data = 0x080000;
+		hwsq_kick = 0x00000001;
+	}
+
+	if (hwsq->len > 0x200) {
+		NV_ERROR(drm, "The HWSQ script is too long (%u bytes). Abort\n",
+			 hwsq->len);
+		return -EIO;
+	}
+
+	/* upload hwsq ucode */
+	nv_mask(device, 0x001098, 0x00000008, 0x00000000);
+	nv_wr32(device, 0x001304, 0x00000000);
+	nv_wr32(device, 0x001318, 0x00000000);
+	for (i = 0; i < hwsq->len / 4; i++)
+		nv_wr32(device, hwsq_data + (i * 4), hwsq->ptr.u32[i]);
+	nv_mask(device, 0x001098, 0x00000018, 0x00000018);
+
+	/* launch, and wait for completion */
+	nv_wr32(device, 0x00130c, hwsq_kick);
+	if (!nv_wait(device, 0x001308, 0x00000100, 0x00000000)) {
+		NV_ERROR(drm, "hwsq ucode exec timed out\n");
+		NV_ERROR(drm, "0x001308: 0x%08x\n", nv_rd32(device, 0x001308));
+		for (i = 0; i < hwsq->len / 4; i++) {
+			NV_ERROR(drm, "0x%06x: 0x%08x\n", 0x1400 + (i * 4),
+				 nv_rd32(device, 0x001400 + (i * 4)));
+		}
+
+		return -EIO;
+	}
+
+	return 0;
+}
+
 void *
 nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 {
@@ -278,6 +545,22 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	struct nouveau_fb *pfb = nouveau_fb(device);
 	u8 ramcfg_cnt;
 	int ret;
+	u32 crtc_mask = 0; /*XXX: nv50_display_active_crtcs(dev); */
+
+	struct nouveau_mem_exec_func exec = {
+		.dev = dev,
+		.precharge = mclk_precharge,
+		.refresh = mclk_refresh,
+		.refresh_auto = mclk_refresh_auto,
+		.refresh_self = mclk_refresh_self,
+		.wait = mclk_wait,
+		.mrg = mclk_mrg,
+		.mrs = mclk_mrs,
+		.clock_set = mclk_clock_set,
+		.timing_set = mclk_timing_set,
+		.timing_post = mclk_timing_post,
+	};
+	struct hwsq_ucode *hwsq;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -290,12 +573,6 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	ret = calc_clk(dev, 0x11, 0x4220, perflvl->shader, &info->sclk);
 	if (ret < 0)
 		goto out;
-
-	if(pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN) {
-		ret = calc_clk(dev, 0x12, 0x4000, perflvl->memory, &info->mclk);
-		if (ret < 0)
-			goto out;
-	}
 
 	ret = calc_clk(dev, 0x20, 0x0000, perflvl->unka0, &info->unka0);
 	if (ret < 0)
@@ -319,6 +596,33 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 		info->ramcfg = NULL;
 
 	info->perflvl = perflvl;
+	exec.priv = info;
+	hwsq = &info->mclk_hwsq;
+
+	if(pfb && pfb->ram->type > NV_MEM_TYPE_STOLEN) {
+		ret = calc_clk(dev, 0x12, 0x4000, perflvl->memory, &info->mclk);
+		if (ret < 0)
+			goto out;
+
+		/* build the ucode which will reclock the memory for us */
+		hwsq_init(hwsq);
+		if (crtc_mask) {
+			hwsq_op5f(hwsq, crtc_mask, 0x00); /* wait for scanout */
+			hwsq_op5f(hwsq, crtc_mask, 0x01); /* wait for vblank */
+		}
+		hwsq_wr32(hwsq, 0x611200, 0x00003300); /* disable scanout */
+		hwsq_setf(hwsq, 0x10, 0); /* disable bus access */
+		hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
+
+		ret = nouveau_mem_exec(&exec, perflvl);
+		if (ret)
+			return NULL;
+
+		hwsq_setf(hwsq, 0x10, 1); /* enable bus access */
+		hwsq_op5f(hwsq, 0x00, 0x00); /* no idea, reverse of 0x00, 0x01? */
+		hwsq_wr32(hwsq, 0x611200, 0x00003330); /* enable scanout */
+		hwsq_fini(hwsq);
+	}
 out:
 	if (ret < 0) {
 		kfree(info);
@@ -327,206 +631,12 @@ out:
 	return info;
 }
 
-static bool
-nva3_pm_grcp_idle(void *data)
-{
-	struct drm_device *dev = data;
-	struct nouveau_device *device = nouveau_dev(dev);
-
-	if (!(nv_rd32(device, 0x400304) & 0x00000001))
-		return true;
-	if (nv_rd32(device, 0x400308) == 0x0050001c)
-		return true;
-	return false;
-}
-
-static void
-mclk_precharge(struct nouveau_mem_exec_func *exec)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	nv_wr32(device, 0x1002d4, 0x00000001);
-}
-
-static void
-mclk_refresh(struct nouveau_mem_exec_func *exec)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	nv_wr32(device, 0x1002d0, 0x00000001);
-}
-
-static void
-mclk_refresh_auto(struct nouveau_mem_exec_func *exec, bool enable)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	nv_wr32(device, 0x100210, enable ? 0x80000000 : 0x00000000);
-}
-
-static void
-mclk_refresh_self(struct nouveau_mem_exec_func *exec, bool enable)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	nv_wr32(device, 0x1002dc, enable ? 0x00000001 : 0x00000000);
-}
-
-static void
-mclk_wait(struct nouveau_mem_exec_func *exec, u32 nsec)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	volatile u32 post = nv_rd32(device, 0); (void)post;
-	udelay((nsec + 500) / 1000);
-}
-
-static u32
-mclk_mrg(struct nouveau_mem_exec_func *exec, int mr)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	if (mr <= 1)
-		return nv_rd32(device, 0x1002c0 + ((mr - 0) * 4));
-	if (mr <= 3)
-		return nv_rd32(device, 0x1002e0 + ((mr - 2) * 4));
-	return 0;
-}
-
-static void
-mclk_mrs(struct nouveau_mem_exec_func *exec, int mr, u32 data)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	struct nouveau_fb *pfb = nouveau_fb(device);
-	if (mr <= 1) {
-		if (pfb->ram->ranks > 1)
-			nv_wr32(device, 0x1002c8 + ((mr - 0) * 4), data);
-		nv_wr32(device, 0x1002c0 + ((mr - 0) * 4), data);
-	} else
-	if (mr <= 3) {
-		if (pfb->ram->ranks > 1)
-			nv_wr32(device, 0x1002e8 + ((mr - 2) * 4), data);
-		nv_wr32(device, 0x1002e0 + ((mr - 2) * 4), data);
-	}
-}
-
-static void
-mclk_clock_set(struct nouveau_mem_exec_func *exec)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	struct nva3_pm_state *info = exec->priv;
-	u32 ctrl;
-
-	ctrl = nv_rd32(device, 0x004000);
-	if (!(ctrl & 0x00000008) && info->mclk.pll) {
-		nv_wr32(device, 0x004000, (ctrl |=  0x00000008));
-		nv_mask(device, 0x1110e0, 0x00088000, 0x00088000);
-		nv_wr32(device, 0x004018, 0x00001000);
-		nv_wr32(device, 0x004000, (ctrl &= ~0x00000001));
-		nv_wr32(device, 0x004004, info->mclk.pll);
-		nv_wr32(device, 0x004000, (ctrl |=  0x00000001));
-		udelay(64);
-		nv_wr32(device, 0x004018, 0x00005000 | info->r004018);
-		udelay(20);
-	} else
-	if (!info->mclk.pll) {
-		nv_mask(device, 0x004168, 0x003f3040, info->mclk.clk);
-		nv_wr32(device, 0x004000, (ctrl |= 0x00000008));
-		nv_mask(device, 0x1110e0, 0x00088000, 0x00088000);
-		nv_wr32(device, 0x004018, 0x0000d000 | info->r004018);
-	}
-
-	if (info->rammap) {
-		if (info->ramcfg && (info->rammap[4] & 0x08)) {
-			u32 unk5a0 = (ROM16(info->ramcfg[5]) << 8) |
-				      info->ramcfg[5];
-			u32 unk5a4 = ROM16(info->ramcfg[7]);
-			u32 unk804 = (info->ramcfg[9] & 0xf0) << 16 |
-				     (info->ramcfg[3] & 0x0f) << 16 |
-				     (info->ramcfg[9] & 0x0f) |
-				     0x80000000;
-			nv_wr32(device, 0x1005a0, unk5a0);
-			nv_wr32(device, 0x1005a4, unk5a4);
-			nv_wr32(device, 0x10f804, unk804);
-			nv_mask(device, 0x10053c, 0x00001000, 0x00000000);
-		} else {
-			nv_mask(device, 0x10053c, 0x00001000, 0x00001000);
-			nv_mask(device, 0x10f804, 0x80000000, 0x00000000);
-			nv_mask(device, 0x100760, 0x22222222, info->r100760);
-			nv_mask(device, 0x1007a0, 0x22222222, info->r100760);
-			nv_mask(device, 0x1007e0, 0x22222222, info->r100760);
-		}
-	}
-
-	if (info->mclk.pll) {
-		nv_mask(device, 0x1110e0, 0x00088000, 0x00011000);
-		nv_wr32(device, 0x004000, (ctrl &= ~0x00000008));
-	}
-}
-
-static void
-mclk_timing_set(struct nouveau_mem_exec_func *exec)
-{
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-	struct nva3_pm_state *info = exec->priv;
-	struct nouveau_pm_level *perflvl = info->perflvl;
-	int i;
-
-	for (i = 0; i < 9; i++)
-		nv_wr32(device, 0x100220 + (i * 4), perflvl->timing.reg[i]);
-
-	if (info->ramcfg) {
-		u32 data = (info->ramcfg[2] & 0x08) ? 0x00000000 : 0x00001000;
-		nv_mask(device, 0x100200, 0x00001000, data);
-	}
-
-	if (info->ramcfg) {
-		u32 unk714 = nv_rd32(device, 0x100714) & ~0xf0000010;
-		u32 unk718 = nv_rd32(device, 0x100718) & ~0x00000100;
-		u32 unk71c = nv_rd32(device, 0x10071c) & ~0x00000100;
-		if ( (info->ramcfg[2] & 0x20))
-			unk714 |= 0xf0000000;
-		if (!(info->ramcfg[2] & 0x04))
-			unk714 |= 0x00000010;
-		nv_wr32(device, 0x100714, unk714);
-
-		if (info->ramcfg[2] & 0x01)
-			unk71c |= 0x00000100;
-		nv_wr32(device, 0x10071c, unk71c);
-
-		if (info->ramcfg[2] & 0x02)
-			unk718 |= 0x00000100;
-		nv_wr32(device, 0x100718, unk718);
-
-		if (info->ramcfg[2] & 0x10)
-			nv_wr32(device, 0x111100, 0x48000000); /*XXX*/
-	}
-}
-
-static void
-mclk_timing_post(struct nouveau_mem_exec_func *exec) {
-	struct nouveau_device *device = nouveau_dev(exec->dev);
-
-	/* We just did all MRs and timings, launch or reset "stuff" first */
-	nv_wr32(device, 0x100264, 0x1);
-	exec->wait(exec, 2000);
-	nv_mask(device, 0x100700, 0x1000000, 0x1000000);
-	nv_mask(device, 0x100700, 0x1000000, 0x0000000);
-}
-
 static void
 prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 {
 	struct nouveau_device *device = nouveau_dev(dev);
-	struct nouveau_mem_exec_func exec = {
-		.dev = dev,
-		.precharge = mclk_precharge,
-		.refresh = mclk_refresh,
-		.refresh_auto = mclk_refresh_auto,
-		.refresh_self = mclk_refresh_self,
-		.wait = mclk_wait,
-		.mrg = mclk_mrg,
-		.mrs = mclk_mrs,
-		.clock_set = mclk_clock_set,
-		.timing_set = mclk_timing_set,
-		.timing_post = mclk_timing_post,
-		.priv = info
-	};
 	u32 ctrl;
+	int ret;
 
 	/* XXX: where the fuck does 750MHz come from? */
 	if (info->perflvl->memory <= 750000) {
@@ -565,13 +675,10 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 	}
 	if (info->rammap && !(info->rammap[4] & 0x02))
 		nv_mask(device, 0x100200, 0x00000800, 0x00000000);
-	nv_wr32(device, 0x611200, 0x00003300);
-	if (!(info->ramcfg[2] & 0x10))
-		nv_wr32(device, 0x111100, 0x4c020000); /*XXX*/
 
-	nouveau_mem_exec(&exec, info->perflvl);
+	/* Launch HWSQ script */
+	ret = prog_hwsq(dev, &info->mclk_hwsq);
 
-	nv_wr32(device, 0x611200, 0x00003330);
 	if (info->rammap && (info->rammap[4] & 0x02))
 		nv_mask(device, 0x100200, 0x00000800, 0x00000800);
 	if (info->ramcfg) {
