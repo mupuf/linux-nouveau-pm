@@ -211,7 +211,11 @@ prog_pll(struct drm_device *dev, int clk, u32 pll, struct creg *reg)
 		nv_wr32(device, coef, reg->pll);
 		nv_mask(device, ctrl, 0x00000015, 0x00000015);
 		nv_mask(device, ctrl, 0x00000010, 0x00000000);
-		nv_wait(device, ctrl, 0x00020000, 0x00020000);
+		if(!nv_wait(device, ctrl, 0x00020000, 0x00020000)) {
+			NV_WARN(drm, "PLL didn't lock!");
+			//nv_mask(device, ctrl, 0x00000008, 0x00000008);
+			return;
+		}
 		nv_mask(device, ctrl, 0x00000010, 0x00000010);
 		nv_mask(device, ctrl, 0x00000008, 0x00000000);
 		nv_mask(device, src1, 0x00000100, 0x00000000);
@@ -379,7 +383,7 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 	if (!(ctrl & 0x00000008) && info->mclk.pll) {
 		/* nva3_pm_clocks_set will alter ctrl */
 		ctrl |= 0x5;
-		hwsq_wr32(hwsq, 0x004000, (ctrl |=  0x00000008));
+		hwsq_wr32(hwsq, 0x004000, (ctrl |=  0x00000108));
 		hwsq_wr32(hwsq, 0x1110e0, u1110e0 | 0x00088000);
 		hwsq_wr32(hwsq, 0x004018, 0x00001000);
 		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000001));
@@ -397,10 +401,15 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 		hwsq_wr32(hwsq, 0x004168, mclk);
 		hwsq_wr32(hwsq, 0x004000, (ctrl |= 0x00000008));
 		hwsq_wr32(hwsq, 0x1110e0, u1110e0 | 0x00088000);
+		hwsq_wr32(hwsq, 0x004018, 0x1000);
+		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000100));
 		hwsq_wr32(hwsq, 0x100da0, info->r100da0);
 		hwsq_wr32(hwsq, 0x004018, 0x0000d000 | info->r004018);
+	} else {
+		ctrl |= 0x5;
+		hwsq_wr32(hwsq, 0x4000, (ctrl |= 0x00000110));
+		hwsq_wr32(hwsq, 0x100da0, info->r100da0);
 	}
-
 
 	exec->wait(exec, 20000);
 
@@ -431,7 +440,6 @@ mclk_clock_set(struct nouveau_mem_exec_func *exec)
 	}
 
 	if (info->mclk.pll) {
-		ctrl |= 5;
 		hwsq_wr32(hwsq, 0x1110e0, 0x1110e0 & ~0x00088000);
 		hwsq_wr32(hwsq, 0x004000, (ctrl &= ~0x00000008));
 	}
@@ -454,6 +462,8 @@ mclk_timing_set(struct nouveau_mem_exec_func *exec)
 
 	if (info->ramcfg) {
 		u32 data = (info->ramcfg[2] & 0x08) ? 0x00000000 : 0x00001000;
+		if (info->rammap && !(info->rammap[4] & 0x02))
+			data &= ~0x00000800;
 		hwsq_wr32(hwsq, 0x100200, unk200 | data);
 	}
 
@@ -547,6 +557,7 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 	struct nva3_pm_state *info;
 	struct nouveau_device *device = nouveau_dev(dev);
 	struct nouveau_fb *pfb = nouveau_fb(device);
+	struct nouveau_drm *drm = nouveau_drm(dev);
 	u8 ramcfg_cnt;
 	int ret;
 	u32 crtc_mask = 0; /*XXX: nv50_display_active_crtcs(dev); */
@@ -608,6 +619,13 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 		if (ret < 0)
 			goto out;
 
+		/* XXX: where the fuck does 750MHz come from? */
+		if (info->perflvl->memory <= 750000) {
+			info->r004018 = 0x10000000;
+			info->r100760 = 0x22222222;
+			info->r100da0 = 0x10;
+		}
+
 		/* build the ucode which will reclock the memory for us */
 		hwsq_init(hwsq);
 		if (crtc_mask) {
@@ -617,6 +635,9 @@ nva3_pm_clocks_pre(struct drm_device *dev, struct nouveau_pm_level *perflvl)
 		hwsq_wr32(hwsq, 0x611200, 0x00003300); /* disable scanout */
 		hwsq_setf(hwsq, 0x10, 0); /* disable bus access */
 		hwsq_op5f(hwsq, 0x00, 0x01); /* no idea :s */
+		hwsq_usec(hwsq, 2);
+		if (!(info->ramcfg[2] & 0x10))
+			hwsq_wr32(hwsq, 0x111100, 0x4c020000); /*XXX*/
 
 		ret = nouveau_mem_exec(&exec, perflvl);
 		if (ret)
@@ -641,13 +662,6 @@ prog_mem(struct drm_device *dev, struct nva3_pm_state *info)
 	struct nouveau_device *device = nouveau_dev(dev);
 	u32 ctrl;
 	int ret;
-
-	/* XXX: where the fuck does 750MHz come from? */
-	if (info->perflvl->memory <= 750000) {
-		info->r004018 = 0x10000000;
-		info->r100760 = 0x22222222;
-		info->r100da0 = 0x10;
-	}
 
 	ctrl = nv_rd32(device, 0x004000);
 	if (ctrl & 0x00000008) {

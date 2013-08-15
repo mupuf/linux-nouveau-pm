@@ -610,8 +610,8 @@ nouveau_mem_exec(struct nouveau_mem_exec_func *exec,
 
 	/* exit self-refresh mode */
 	exec->wait(exec, tCKSRX);
-	exec->precharge(exec);
 	exec->refresh_self(exec, false);
+	exec->precharge(exec);
 	exec->refresh_auto(exec, true);
 	exec->wait(exec, tXS);
 	exec->wait(exec, tXS);
